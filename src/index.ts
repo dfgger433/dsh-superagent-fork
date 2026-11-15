@@ -1,27 +1,78 @@
-/** Main plugin entry: mounts the Runtime and provides its restart callback for deployment account changes. */
+/** Host coordinator: only a real Session selecting the Router preset mounts the deployment. */
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-settings'
 import { Runtime } from './app/runtime.ts'
+import { RouterController } from './app/router-controller.ts'
+import { ROUTER_PRESET } from './app/sessions.ts'
+import { sameOrigin } from './app/http.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 
 export const name = 'dsh-superagent'
-export const inject = ['agents', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
+export const inject = ['agents', 'agentPresets', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
 export { Config }
 export async function apply(ctx: Context, config: DeploymentConfig): Promise<void> {
   const machine = machineOf(config)
-  // The management panel provides its own settings UI, so disable DSH's auto-generated settings page.
   ctx.inject(['settings'], child => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
-  // Volatile limits update in place without a restart; account changes restart dsh-superagent. DSH's settings service stops
-  // serving this entry while dsh-superagent restarts and rereads it only on a configuration write, so trigger `describe()`
-  // after restart to keep open configuration forms editable without a page reload.
-  // TODO: drop the read once DSH's settings service rereads an entry whose plugin becomes active again.
-  const restart = (): void => {
-    ctx.fiber.restart().then(() => { ctx.get('settings')?.describe() }).catch((error: unknown) => { ctx.logger.error('dsh-superagent restart failed: %s', String(error)) })
+  let activeRuntime: Runtime | undefined
+  let activationError: string | undefined
+  const blocked = new Map<Agent, (() => void)[]>()
+  const explain = (agent: Agent, reason: string) => {
+    if (blocked.has(agent)) return
+    const disposers = [agent.ctx.tools.restrict({ allow: [] }), agent.ctx.systemPrompt.section({
+      name: 'superagent-router-unavailable', order: 9999, text: `Superagent is unavailable in this Session: ${reason}. Explain this to the user. Do not execute or route work from here.`,
+    })]
+    blocked.set(agent, disposers)
   }
-  const runtime = new Runtime(ctx, machine, restart)
-  ctx.effect(() => async () => { await runtime.stop() })
-  await runtime.ready
-  ctx.logger.info(runtime.configured() ? 'dsh-superagent ready; the Superagent sidebar entry opens the management panel' : `dsh-superagent is waiting for setup: ${runtime.setupProblem?.detail ?? ''}`)
+  const controller = new RouterController<Agent>(async agent => {
+    let runtime: Runtime | undefined
+    const restart = () => { ctx.fiber.restart().then(() => { ctx.get('settings')?.describe() }).catch(error => ctx.logger.error(String(error))) }
+    const mounted = ctx.plugin({ name: 'superagent-active-deployment', apply(child: Context) {
+      runtime = activeRuntime = new Runtime(child, machine, restart, agent)
+      child.effect(() => async () => { await runtime!.stop(); if (activeRuntime === runtime) activeRuntime = undefined })
+      return runtime.ready
+    } })
+    try { await mounted.await() }
+    catch (error) { await mounted.dispose(); throw error }
+    return { stop: async () => { await mounted.dispose() } }
+  }, (agent, owner) => explain(agent, `This deployment already belongs to Router Session ${owner}; reopen it, or use a different stateDir`))
+  if (ctx.webServer.host !== '127.0.0.1') throw new Error('Superagent requires a loopback Web server')
+  ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/superagent-status', handler: async (req, res) => {
+    if (req.method !== 'GET' || !sameOrigin(req, ctx.webServer.port)) { res.writeHead(403); res.end(); return }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ ...controller.status(), ...(activationError ? { error: activationError } : {}),
+      ...(activeRuntime ? { sessionId: activeRuntime.masterId, configured: activeRuntime.configured(), paused: activeRuntime.store.settings().paused } : {}) }))
+  } }))
+  const selected = (agent: Agent): boolean => {
+    const presets = ctx.get('agentPresets') as { presetForSession(session: Agent['session']): string | null }
+    return !agent.session.header.parentSession && (presets.presetForSession(agent.session) ?? agent.session.header.agentPreset) === ROUTER_PRESET
+  }
+  const activate = async (agent: Agent) => {
+    try { await controller.use(agent); activationError = undefined }
+    catch (error) { activationError = String(error); ctx.logger.error('Superagent activation failed: %s', String(error)); explain(agent, String(error)) }
+  }
+  ctx.on('agent/created', async ({ agent }) => { if (selected(agent)) await activate(agent) })
+  ctx.on('agent-preset/selected', (id, preset) => {
+    const agent = ctx.agents.get(id as Agent['id'])
+    if (agent && !agent.session.header.parentSession && preset === ROUTER_PRESET) return activate(agent)
+    if (agent && preset !== ROUTER_PRESET) {
+      for (const dispose of blocked.get(agent) ?? []) dispose()
+      blocked.delete(agent)
+      return controller.release(id)
+    }
+  })
+  ctx.on('agent/disposed', async ({ agent }) => {
+    for (const dispose of blocked.get(agent) ?? []) dispose()
+    blocked.delete(agent)
+    await controller.release(agent.id)
+  })
+  ctx.effect(() => async () => {
+    await controller.stop()
+    for (const disposers of blocked.values()) for (const dispose of disposers) dispose()
+    blocked.clear()
+  })
+  for (const agent of ctx.agents.list()) if (selected(agent)) await activate(agent)
+  ctx.logger.info('Superagent installed; select Superagent Router in a new Session to activate this deployment')
 }
 export type { Deployment, DeploymentConfig } from './deployment.ts'
 export * from './core/index.ts'

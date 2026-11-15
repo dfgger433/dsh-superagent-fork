@@ -7,6 +7,9 @@ import { HEALTH_TEXT } from '../sources/host.ts'
 
 const TEXT = {
   // Shared
+  routerInactive: ['尚未启用：请在新会话中选择 Superagent Router 预设。', 'Inactive: select the Superagent Router preset in a new Session.'],
+  routerActive: ['Router 已绑定主会话；配置与运行状态见下方。', 'Router bound to the main Session; setup and execution status appear below.'],
+  'source.chat': ['本地主会话', 'Local conversation'],
   title: ['Superagent', 'Superagent'],
   close: ['关闭', 'Close'],
   cancel: ['取消', 'Cancel'],

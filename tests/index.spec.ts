@@ -1,62 +1,79 @@
+/** The bundle Host is inert until an actual root Agent selects its Router preset. */
 import { expect, it, vi } from 'vitest'
-import { Config, type Machine } from '../src/deployment.ts'
+import { Context } from '@deepseek-ai/cordis'
+import { Config } from '../src/deployment.ts'
 import { apply } from '../src/index.ts'
-
-// Stub Runtime to capture the resolved Machine settings and restart callback.
-const runtimes = vi.hoisted(() => [] as { machine: Machine; restart: () => void }[])
+const runtimes = vi.hoisted(() => [] as { stop: ReturnType<typeof vi.fn>; router: unknown }[])
 vi.mock('../src/app/runtime.ts', () => ({ Runtime: class {
-  ready = Promise.resolve()
-  constructor(_ctx: unknown, readonly machine: Machine, readonly restart: () => void) { runtimes.push(this) }
+  ready = Promise.resolve(); masterId = 'user-session'
+  store = { settings: () => ({ paused: false }) }
+  stop = vi.fn(async () => {})
+  constructor(_ctx: unknown, _machine: unknown, _restart: unknown, readonly router: unknown) { runtimes.push(this) }
   configured() { return true }
-  async stop() {}
 } }))
-/** Simulate the Cordis loader updating a volatile configuration reference in place. */
-const commit = (reference: unknown, value: unknown) => { (reference as Record<symbol, (value: unknown) => void>)[Symbol.for('cosmokit.volatile.write')]!(value) }
-
 function context() {
-  const handlers = new Map<string, () => void>()
+  const handlers = new Map<string, (...args: any[]) => unknown>()
+  const cleanups: (() => unknown)[] = []
   const configure = vi.fn(() => () => {})
-  const describe = vi.fn(() => [])
-  const ctx = {
-    on: vi.fn((name: string, handler: () => void) => { handlers.set(name, handler) }),
-    inject: vi.fn((_services: string[], callback: (child: unknown) => void) => { callback({ effect: (effect: () => unknown) => effect(), settings: { configure } }) }),
-    effect: vi.fn(),
+  const agent = { id: 'user-session', session: { header: { agentPreset: 'dsh-superagent-router' } }, ctx: { tools: { restrict: vi.fn(() => () => {}) }, systemPrompt: { section: vi.fn(() => () => {}) } } }
+  const ctx: any = {
+    on: vi.fn((name: string, handler: (...args: any[]) => unknown) => { handlers.set(name, handler) }),
+    inject: vi.fn((_services: string[], callback: (child: unknown) => void) => callback({ effect: (effect: () => unknown) => effect(), settings: { configure } })),
+    effect: vi.fn((effect: () => unknown) => { const cleanup = effect(); if (typeof cleanup === 'function') cleanups.push(cleanup as () => unknown) }),
     fiber: { restart: vi.fn(async () => {}) },
-    get: vi.fn((name: string) => name === 'settings' ? { describe } : undefined),
+    agents: { list: () => [], get: () => agent },
+    get: vi.fn((name: string) => name === 'agentPresets' ? { presetForSession: () => 'dsh-superagent-router' } : undefined),
     logger: { info: vi.fn(), error: vi.fn() },
+    webServer: { host: '127.0.0.1', port: 1234, register: vi.fn(() => () => {}) },
   }
-  return { ctx, handlers, configure, describe }
+  ctx.plugin = vi.fn((plugin: { apply(child: unknown): unknown }) => {
+    const childCleanups: (() => Promise<void>)[] = []
+    const child = { ...ctx, effect: (fn: () => () => Promise<void>) => { childCleanups.push(fn()) } }
+    const result = Promise.resolve(plugin.apply(child)) as Promise<unknown> & { dispose: () => Promise<void> }
+    result.dispose = async () => { for (const cleanup of childCleanups) await cleanup() }
+    return { await: () => result, dispose: result.dispose }
+  })
+  return { ctx, handlers, configure, agent, cleanups }
 }
-
-it('reads a limit DSH commits a new value of without a restart, and asks DSH to generate no settings page', async () => {
-  const { ctx, handlers, configure } = context()
-  const config = Config({ stateDir: '/srv/state', promptMaxChars: 5000 })
-  await apply(ctx as never, config)
-  expect(configure).toHaveBeenCalledExactlyOnceWith({ auto: false }, ctx.fiber)
-  const { machine } = runtimes.at(-1)!
-  expect(machine.promptMaxChars.get()).toBe(5000)
-  commit(config.promptMaxChars, 8000)
-  expect(machine.promptMaxChars.get()).toBe(8000)
-  expect(handlers.has('loader/volatile-update')).toBe(false)
-  expect(ctx.fiber.restart).not.toHaveBeenCalled()
+it('does not construct Runtime when installed, then adopts the selected user session', async () => {
+  runtimes.length = 0
+  const { ctx, handlers, configure, agent, cleanups } = context()
+  await apply(ctx, Config({ stateDir: '/srv/state' }))
+  expect(configure).toHaveBeenCalledWith({ auto: false }, ctx.fiber)
+  expect(runtimes).toHaveLength(0)
+  await handlers.get('agent/created')!({ agent })
+  expect(runtimes).toHaveLength(1)
+  expect(runtimes[0]!.router).toBe(agent)
+  await handlers.get('agent/disposed')!({ agent })
+  expect(runtimes[0]!.stop).toHaveBeenCalledTimes(1)
+  for (const cleanup of cleanups) await cleanup()
 })
-
-it('asks DSH to read its settings entry again once a restart it started finished', async () => {
-  const { ctx, describe } = context()
-  let finish = () => {}
-  ctx.fiber.restart.mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
-  await apply(ctx as never, Config({ stateDir: '/srv/state' }))
-  // Saving a Source account change restarts dsh-superagent, which re-runs setup and refreshes the settings descriptor.
-  runtimes.at(-1)!.restart()
-  await Promise.resolve()
-  expect(describe).not.toHaveBeenCalled()
-  finish()
-  await vi.waitFor(() => { expect(describe).toHaveBeenCalledTimes(1) })
+it('does not activate from child agents or other presets', async () => {
+  runtimes.length = 0
+  const { ctx, handlers, agent } = context()
+  await apply(ctx, Config({ stateDir: '/srv/state' }))
+  await handlers.get('agent/created')!({ agent: { ...agent, session: { header: { parentSession: 'worker-one' } } } })
+  ctx.get.mockReturnValue({ presetForSession: () => 'standard' })
+  await handlers.get('agent/created')!({ agent })
+  expect(runtimes).toHaveLength(0)
 })
-
-it('refuses keys of the previous configuration before registering anything', async () => {
+it('mounts and unloads through real Cordis Fibers', async () => {
+  runtimes.length = 0
+  const root = new Context()
+  const { agent } = context()
+  const live = new Map([[agent.id, agent]])
+  root.reflect.provide('agents', { list: () => [...live.values()], get: (id: string) => live.get(id) })
+  root.reflect.provide('agentPresets', { presetForSession: () => 'dsh-superagent-router' })
+  root.reflect.provide('webServer', { host: '127.0.0.1', port: 1234, register: () => () => {} })
+  const plugin = root.plugin({ name: 'test-router-host', apply: child => apply(child, Config({ stateDir: '/srv/state' })) })
+  await plugin.await()
+  expect(runtimes).toHaveLength(1)
+  await plugin.dispose()
+  expect(runtimes[0]!.stop).toHaveBeenCalledTimes(1)
+})
+it('refuses obsolete configuration before registering anything', async () => {
   const { ctx } = context()
-  await expect(apply(ctx as never, Config({ stateDir: '/srv/state', github: { cli: 'gh' } } as never))).rejects.toThrow('github (now on the GitHub Source)')
+  await expect(apply(ctx, Config({ stateDir: '/srv/state', github: { cli: 'gh' } } as never))).rejects.toThrow('github (now on the GitHub Source)')
   expect(ctx.on).not.toHaveBeenCalled()
   expect(ctx.inject).not.toHaveBeenCalled()
 })

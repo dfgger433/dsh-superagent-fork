@@ -12,6 +12,8 @@ import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { openKnownSession, SessionNavigationError } from '../navigation.ts'
 import { App } from './app.tsx'
+import { usePoll } from './api.ts'
+import { Button } from './controls.tsx'
 import { PluginConfig, usePageForm } from './deployment.tsx'
 import { en, zh } from './locales.ts'
 import type { T } from './text.ts'
@@ -42,7 +44,17 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
     }
   }, [ctx, t])
   const form = usePageForm(ctx.get('configForms')?.get<Record<string, unknown>>(ENTRY))
-  return <App t={t} openSession={openSession} deploymentForm={form} />
+  const activation = usePoll(async () => {
+    const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
+    if (!response.ok) throw new Error(t('offline'))
+    return await response.json() as { state: string; sessionId?: string; error?: string }
+  }, [t])
+  if (activation.data?.state === 'inactive' || activation.data?.state === 'stopped') return <section className="dt-panel">
+    <h1>{t('title')}</h1><p>{t('routerInactive')}</p>
+    {activation.data.error && <p role="alert">{activation.data.error}</p>}
+  </section>
+  return <><div className="dt-hint">{t('routerActive')} {activation.data?.sessionId && <Button onClick={() => { void openSession(activation.data!.sessionId!) }}>{t('openMaster')}</Button>}</div>
+    <App t={t} openSession={openSession} deploymentForm={form} /></>
 }
 
 export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']

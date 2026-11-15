@@ -46,6 +46,8 @@ import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
+import { ChatMessages, chatTools } from './chat.ts'
+import { createChatKind, LOCAL_OPERATOR } from '../sources/chat.ts'
 
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -84,7 +86,7 @@ export class Runtime extends Service implements SourceHost {
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
-  constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
+  constructor(ctx: Context, readonly machine: Machine, restart: () => void, private readonly router?: Agent) {
     super(ctx, 'orchestrator')
     const runtime = this
     // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
@@ -101,8 +103,17 @@ export class Runtime extends Service implements SourceHost {
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!setup.deployment.feishu
       const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
-      const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
-      store.set(KV.runtime.masterId, masterId)
+      const previous = store.get(KV.runtime.masterId)
+      const owner = store.get(KV.runtime.routerOwner)
+      if (router && owner && owner !== router.id) throw new Error(`Deployment belongs to Router Session ${owner}; reopen that Session or configure a different stateDir`)
+      const masterId = this.masterId = router?.id ?? previous ?? `orchestrator-${key(machine.stateDir)}`
+      store.atomic(() => {
+        if (router) {
+          if (previous && previous !== masterId && !owner) store.set(KV.runtime.legacyMasterId, previous)
+          store.set(KV.runtime.routerOwner, masterId)
+        }
+        store.set(KV.runtime.masterId, masterId)
+      })
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
       const board = this.board
       const effects = this.effects = new Effects(store, board)
@@ -115,13 +126,37 @@ export class Runtime extends Service implements SourceHost {
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
+      const chatMessages = router ? new ChatMessages(ctx, masterId) : undefined
+      if (chatMessages) this.disposers.push(() => chatMessages.dispose())
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
-        lifetime: this.lifetime,
+        lifetime: this.lifetime, userRouter: !!router,
         closing: () => this.closing(), environment,
-        tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
+        tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : [ ...mainTools(this.toolHost, agent),
+          ...chatMessages ? chatTools({ messages: chatMessages, receive: (trigger, ticketId, signal) => {
+            signal.throwIfAborted()
+            if (ticketId && !store.tickets.get(ticketId)) throw new Error('Unknown follow-up ticket')
+            const existing = store.get(KV.runtime.chatRoute(trigger.id))
+            if (existing && existing.ticketId !== ticketId) throw new Error('This message was already routed differently; use a new user message')
+            const stored = existing ? 'duplicate' : store.atomic(() => {
+              const result = this.receive(trigger)
+              if (ticketId) this.quietlyAttach(ticketId, trigger.id)
+              store.set(KV.runtime.chatRoute(trigger.id), { ...(ticketId ? { ticketId } : {}) })
+              return result
+            })
+            return { status: stored, trigger_id: trigger.id, thread_id: trigger.threads[0]!.id, ...(ticketId ? { ticket_id: ticketId } : {}) }
+          } }) : [] ] })
+      if (router) {
+        this.disposers.push(sources.register(createChatKind(async message => {
+          await sessions.prompt(masterId, `chat-reply:${message.id}`, `Local task message (communicate to the user as appropriate):\n${message.text}`, 'steer')
+          return 'sent'
+        })))
+        const current = store.settings()
+        store.saveSettings({ ...current, policy: { ...current.policy, sources: { ...current.policy.sources,
+          chat: { ...current.policy.sources.chat, allowed: [{ id: LOCAL_OPERATOR }] } } } })
+      }
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
@@ -190,7 +225,27 @@ export class Runtime extends Service implements SourceHost {
     const { setup: { deployment }, sources } = this
     return ticketEnvironment({ deployment, sources, settings: this.store.settings(), ticket, ...trigger ? { trigger } : {} })
   }
+  /** Environment for the bound Router, owned Workers and their descendants; never for unrelated Sessions. */
+  environmentFor(sessionId: string): Record<string, string | undefined> | undefined {
+    if (this.closing() || !this.configured()) return undefined
+    if (sessionId === this.masterId) return this.setup.workerEnvironment
+    let id: string | undefined = sessionId
+    for (let depth = 0; id && depth < 32; depth++) {
+      const ticketId = id.startsWith('worker-') ? id.slice('worker-'.length) : undefined
+      if (ticketId) {
+        const ticket = this.store.tickets.get(ticketId)
+        return ticket && !ticket.ended ? this.setup.workerEnvironment : undefined
+      }
+      id = this.ctx.agents.get(id as SessionId)?.session.header.parentSession
+    }
+    return undefined
+  }
   checkSetup(): void { this.setup.check() }
+  private quietlyAttach(ticketId: string, triggerId: string): void {
+    this.quiet++
+    try { this.engine.attach(ticketId, triggerId) } finally { this.quiet-- }
+    this.passes.request()
+  }
   receive(trigger: Trigger): ReceiveResult { return this.passes.receive(trigger) }
   idle(): Promise<void> { return this.passes.idle() }
   pump(): Promise<void> { return this.passes.pump() }
@@ -201,13 +256,19 @@ export class Runtime extends Service implements SourceHost {
   private async initialize(): Promise<void> {
     // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.
     this.disposers.push(registerHttp(this.ctx, this.httpHost()))
-    if (!await this.setup.run(this.store.settings())) {
+    const configured = await this.setup.run(this.store.settings())
+    // Decorate even on failed setup, but after the probe so optional Source skills reflect resolved accounts.
+    if (this.router) {
+      this.sessions.install()
+      await this.sessions.adopt(this.router)
+    }
+    if (!configured) {
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
       return
     }
-    this.sessions.install()
+    if (!this.router) this.sessions.install()
     this.executor.install()
-    await this.sessions.ensure(this.masterId, this.machine.stateDir, 'dsh-superagent orchestrator', 'orchestrator')
+    if (!this.router) await this.sessions.ensure(this.masterId, this.machine.stateDir, 'dsh-superagent orchestrator', 'orchestrator')
     for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() records its failure in health. */ })
     // If stop() was called while awaiting setup, session creation, or policy sync, do not start background loops.
     if (this.closing()) return
