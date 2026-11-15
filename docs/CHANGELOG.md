@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — Fresh installation activation fix
+
+- Fix Host startup failure when the bundle is installed without `stateDir`: default to `<DSH_PROFILE_DIR>/superagent`, or the equivalent profile path under DSH_HOME. Installation remains idle until a Router is used.
+- Declare Runtime child-plugin service dependencies so Cordis permits access to subprocess, sessions and other Host services.
+- Keep the main panel and Plugin Manager configuration usable during inactive or failed activation; show diagnostics and allow state-directory repair without requiring a working deployment API.
+- Allow explicit same-origin transfer of an empty deployment to the intended Router Session; refuse transfer when Tickets exist.
+- Remove the duplicated main-session navigation button that could produce an unhandled missing-session error.
+- Add an unmocked Host + Runtime first-install test checking Router tools and HTTP settings routes before GitHub setup.
+
+Existing linked installations need a DSH restart to load the new Host module. Retain the selected Router Session and configure repository/account Sources after restart.
+
 ## 0.2.0 — Router preset fork
 
 ### Changed

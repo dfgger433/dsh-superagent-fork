@@ -13,7 +13,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { openKnownSession, SessionNavigationError } from '../navigation.ts'
 import { App } from './app.tsx'
 import { usePoll } from './api.ts'
-import { Button } from './controls.tsx'
 import { PluginConfig, usePageForm } from './deployment.tsx'
 import { en, zh } from './locales.ts'
 import type { T } from './text.ts'
@@ -49,11 +48,13 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
     if (!response.ok) throw new Error(t('offline'))
     return await response.json() as { state: string; sessionId?: string; error?: string }
   }, [t])
-  if (activation.data?.state === 'inactive' || activation.data?.state === 'stopped') return <section className="dt-panel">
-    <h1>{t('title')}</h1><p>{t('routerInactive')}</p>
-    {activation.data.error && <p role="alert">{activation.data.error}</p>}
+  if (activation.error || activation.data?.error || activation.data?.state === 'inactive' || activation.data?.state === 'stopped') return <section className="dt-panel">
+    <h1>{t('title')}</h1>
+    <p>{activation.error || activation.data?.error ? t('routerActivationFailed') : t('routerInactive')}</p>
+    {(activation.data?.error || activation.error) && <p role="alert" className="dt-error">{activation.data?.error ?? activation.error?.message}</p>}
+    <p className="dt-hint">{t('routerActivationHint')}</p>
   </section>
-  return <><div className="dt-hint">{t('routerActive')} {activation.data?.sessionId && <Button onClick={() => { void openSession(activation.data!.sessionId!) }}>{t('openMaster')}</Button>}</div>
+  return <><div className="dt-hint">{t('routerActive')}</div>
     <App t={t} openSession={openSession} deploymentForm={form} /></>
 }
 

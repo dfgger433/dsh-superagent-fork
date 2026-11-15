@@ -40,8 +40,10 @@ const openMaster = async (container: HTMLElement) => {
   await act(async () => { button.click() })
   for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 }
-const serve = () => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-  const path = new URL(url, 'http://127.0.0.1').pathname.replace('/orchestrator/api/', '')
+const serve = (status: Record<string, unknown> = { state: 'active', sessionId: 'master' }) => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+  const parsed = new URL(url, 'http://127.0.0.1')
+  if (parsed.pathname === '/superagent-status') return Response.json(status)
+  const path = parsed.pathname.replace('/orchestrator/api/', '')
   if (path === 'overview') return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0, filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
   if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
     setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
@@ -57,6 +59,15 @@ it('registers a localized main panel, sidebar entry and Plugin Manager row page,
   expect(main.options).toMatchObject({ key: 'dsh-superagent', locale: 'dshSuperagent' })
   expect(nav.options).toMatchObject({ id: 'dsh-superagent', order: 10, locale: 'dshSuperagent' })
   expect(nav.options.label?.()).toBe('Superagent')
+})
+
+it('shows activation diagnostics instead of falling through to the app when Router activation fails', async () => {
+  serve({ state: 'inactive', error: 'stateDir is required' })
+  const { main } = fixture([])
+  const view = await render(main, { t })
+  expect(view.container.textContent).toContain(zh.routerActivationFailed)
+  expect(view.container.textContent).toContain('stateDir is required')
+  view.dispose()
 })
 
 it('opens a listed Session through the workspace from the main panel', async () => {

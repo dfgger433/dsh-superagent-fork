@@ -16,6 +16,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   ctx.inject(['settings'], child => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
   let activeRuntime: Runtime | undefined
   let activationError: string | undefined
+  let transferring = false
   const blocked = new Map<Agent, (() => void)[]>()
   const explain = (agent: Agent, reason: string) => {
     if (blocked.has(agent)) return
@@ -27,7 +28,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   const controller = new RouterController<Agent>(async agent => {
     let runtime: Runtime | undefined
     const restart = () => { ctx.fiber.restart().then(() => { ctx.get('settings')?.describe() }).catch(error => ctx.logger.error(String(error))) }
-    const mounted = ctx.plugin({ name: 'superagent-active-deployment', apply(child: Context) {
+    const mounted = ctx.plugin({ name: 'superagent-active-deployment', inject, apply(child: Context) {
       runtime = activeRuntime = new Runtime(child, machine, restart, agent)
       child.effect(() => async () => { await runtime!.stop(); if (activeRuntime === runtime) activeRuntime = undefined })
       return runtime.ready
@@ -38,7 +39,31 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   }, (agent, owner) => explain(agent, `This deployment already belongs to Router Session ${owner}; reopen it, or use a different stateDir`))
   if (ctx.webServer.host !== '127.0.0.1') throw new Error('Superagent requires a loopback Web server')
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/superagent-status', handler: async (req, res) => {
-    if (req.method !== 'GET' || !sameOrigin(req, ctx.webServer.port)) { res.writeHead(403); res.end(); return }
+    if (!sameOrigin(req, ctx.webServer.port)) { res.writeHead(403); res.end(); return }
+    if (req.method === 'POST') {
+      if (transferring) { res.writeHead(409); res.end(JSON.stringify({ error: 'Router transfer already in progress' })); return }
+      transferring = true
+      try {
+        let body = ''
+        for await (const chunk of req) { body += String(chunk); if (Buffer.byteLength(body) > 4096) throw new Error('Request is too large') }
+        const value = JSON.parse(body) as { sessionId?: unknown }
+        if (typeof value.sessionId !== 'string' || !value.sessionId || Object.keys(value).some(key => key !== 'sessionId')) throw new Error('Expected a Router sessionId')
+        const resolved = await ctx.sessionController.resolveAgent(value.sessionId as Agent['id'])
+        if ('error' in resolved) throw new Error('Target Session is unavailable')
+        if (!selected(resolved.agent)) throw new Error('Target must be a root Session using the Superagent Router preset')
+        const owner = activeRuntime
+        if (owner && owner.masterId !== resolved.agent.id) {
+          owner.transferRouter(resolved.agent.id)
+          await controller.release(owner.masterId)
+        }
+        for (const dispose of blocked.get(resolved.agent) ?? []) dispose()
+        blocked.delete(resolved.agent)
+        await activate(resolved.agent)
+        if (activationError) throw new Error(activationError)
+      } catch (error) {
+        res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: String(error) })); return
+      } finally { transferring = false }
+    } else if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     res.end(JSON.stringify({ ...controller.status(), ...(activationError ? { error: activationError } : {}),
       ...(activeRuntime ? { sessionId: activeRuntime.masterId, configured: activeRuntime.configured(), paused: activeRuntime.store.settings().paused } : {}) }))

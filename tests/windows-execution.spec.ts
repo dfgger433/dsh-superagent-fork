@@ -15,6 +15,11 @@ import { ExecutorConfigSchema } from '../src/policy.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 const exec = promisify(execFile)
 
+it('accepts a fresh bundle configuration without stateDir and does not create storage', () => {
+  const config = Config({})
+  expect(config.stateDir).toMatch(/[\\/]superagent$/)
+  expect(machineOf(config).stateDir).toBe(config.stateDir)
+})
 it('accepts POSIX, drive and UNC absolute paths and rejects relative paths', () => {
   for (const stateDir of ['/var/state', 'C:\\Agent Data', '\\\\server\\share\\state']) {
     expect(() => Config({ stateDir })).not.toThrow()

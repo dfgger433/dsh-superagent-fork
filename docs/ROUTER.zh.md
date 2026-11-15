@@ -13,7 +13,7 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-在 DSH「插件 → 添加插件」选择项目目录，或已构建的包。插件配置 `stateDir` 为专属状态目录，例如 `H:\SuperagentData\widgets`，不要与代码目录混用。包保留 `dsh-superagent` 名称，升级前停用旧版本，不同时加载两份相同包或预设。
+在 DSH「插件 → 添加插件」选择项目目录，或已构建的包。`stateDir` 从 0.2.1 起默认使用当前 DSH profile 下的 `superagent` 子目录，不需要首次安装前手工填写。可在插件配置中改为专属状态目录，例如 `H:\SuperagentData\widgets`，不要与代码目录混用。已有配置继续优先使用。包保留 `dsh-superagent` 名称，升级前停用旧版本，不同时加载两份相同包或预设。
 
 新建 DSH 会话并选择 **Superagent Router**。该会话成为此部署唯一 Router；只是安装、启用插件或加载预设定义不会启动来源监听或自动创建主会话。普通预设不获得这些功能。首次使用可能等待账号配置，在 Superagent 面板的来源设置中填写 GitHub 仓库和已登录的智能体 CLI，再执行配置检查。
 

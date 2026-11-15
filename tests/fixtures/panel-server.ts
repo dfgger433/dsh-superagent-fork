@@ -99,6 +99,7 @@ export interface PanelServer {
   queued: Set<string>
   searching?: (query: string) => Promise<void>
   setup: SetupView
+  activation: { state: 'inactive' | 'active' | 'stopped'; sessionId?: string; error?: string }
   health: Record<string, Health>
   /** When true, all API requests return an empty 404 to simulate the host plugin being stopped. */
   down: boolean
@@ -248,6 +249,7 @@ function initial(): PanelServer {
   const defaults = { revision: 0, previousRevision: null, savedAt: '', source: 'defaults' }
   return {
     health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [],
+    activation: { state: 'active', sessionId: 'master' },
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
         name: 'Widgets Bot' } } },
@@ -436,6 +438,10 @@ export function usePanelServer(cleanup: () => void) {
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
       if (server.down) return new Response(null, { status: 404 })
       const address = new URL(url, 'http://127.0.0.1:3082')
+      if (address.pathname === '/superagent-status') {
+        server.requests.push({ path: 'superagent-status', method: 'GET' })
+        return Response.json(server.activation)
+      }
       const path = address.pathname.replace('/orchestrator/api/', '')
       const method = init?.method ?? 'GET'
       const body: unknown = init?.body ? JSON.parse(String(init.body)) : undefined

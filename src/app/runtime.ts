@@ -240,6 +240,14 @@ export class Runtime extends Service implements SourceHost {
     }
     return undefined
   }
+  /** Explicit operator transfer is allowed only before work has been dispatched. */
+  transferRouter(sessionId: string): void {
+    if (this.store.tickets.list().length) throw new Error('Router transfer requires a deployment with no Tickets; retain the current Router for existing work')
+    this.store.atomic(() => {
+      this.store.set(KV.runtime.routerOwner, sessionId)
+      this.store.set(KV.runtime.masterId, sessionId)
+    })
+  }
   checkSetup(): void { this.setup.check() }
   private quietlyAttach(ticketId: string, triggerId: string): void {
     this.quiet++

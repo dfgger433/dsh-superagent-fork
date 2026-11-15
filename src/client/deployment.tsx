@@ -2,11 +2,11 @@
  * Deployment settings view shared between the panel Settings tab and the DSH Plugin Manager config page.
  * Edits host-level plugin configuration limits through DSH `ConfigForm` when writable.
  */
-import { useCallback, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ConfigPageForm } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { LIMITS } from '../limits.ts'
-import type { SetupView } from './api.ts'
+import { usePoll, type SetupView } from './api.ts'
 import { InfoTip, Input } from './controls.tsx'
 import { SaveBar, useDraft } from './draft.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
@@ -92,7 +92,40 @@ function PluginPage({ form }: { form: DeploymentForm }) {
       : error ? <p className="dt-error" role="alert">{error.message}</p> : <p className="dt-hint">{t('loading')}</p>}
   </div>
 }
+function ConfigFallback({ t, form }: { t: T; form: DeploymentForm }) {
+  const snapshot = form?.state
+  const editable = snapshot?.status === 'ready' && snapshot.writable
+  const configured = typeof snapshot?.value?.stateDir === 'string' ? snapshot.value.stateDir : ''
+  const [stateDir, setStateDir] = useState(configured)
+  const [message, setMessage] = useState('')
+  useEffect(() => { setStateDir(configured) }, [configured])
+  const save = async () => {
+    if (!form || !editable || !stateDir.trim()) return
+    try {
+      if (await form.mutate([{ op: 'set', path: ['stateDir'], value: stateDir.trim() }], snapshot.revision)) setMessage(t('savedRestarting'))
+      else setMessage(t('deploymentRefused'))
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
+  }
+  return <div className="dt-embedded">
+    <p className="dt-hint">{t('routerActivationHint')}</p>
+    {form && editable ? <div className="dt-row-buttons"><label className="dt-field"><span className="dt-field-head">{t('deploymentStateDir')}</span>
+      <input value={stateDir} onChange={event => setStateDir(event.target.value)} placeholder={t('deploymentStateDir')} />
+      <button type="button" onClick={() => { void save() }} disabled={!stateDir.trim()}>{t('save')}</button>
+    </label>{message && <p className="dt-hint" role="status">{message}</p>}</div> : <p className="dt-hint">{t('deploymentUnavailable')}</p>}
+  </div>
+}
+function PluginActivation({ t, form }: { t: T; form: DeploymentForm }) {
+  const status = usePoll(async () => {
+    const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
+    if (!response.ok) throw new Error(t('deploymentUnavailable'))
+    return await response.json() as { state: 'inactive' | 'active' | 'stopped'; error?: string }
+  }, [t], 10_000)
+  if (status.error) return <div className="dt-embedded"><p className="dt-error" role="alert">{t('routerActivationFailed')}</p><p className="dt-hint">{status.error.message}</p><ConfigFallback t={t} form={form} /></div>
+  if (!status.data || status.data.error || status.data.state !== 'active') return <div className="dt-embedded"><p className={status.data?.error ? 'dt-error' : 'dt-hint'} role={status.data?.error ? 'alert' : undefined}>{status.data?.error ? t('routerActivationFailed') : t('routerInactive')}</p>
+    {status.data?.error && <p className="dt-hint">{status.data.error}</p>}<ConfigFallback t={t} form={form} /></div>
+  return <PanelProvider t={t} interval={10_000}><PluginPage form={form} /></PanelProvider>
+}
 /** DSH Plugin Manager config view entry; renders nothing in `summary` mode because DSH displays the package description. */
 export function PluginConfig({ t, view, form }: { t: T; view: 'page' | 'summary'; form: DeploymentForm }) {
-  return view === 'page' ? <PanelProvider t={t} interval={10_000}><PluginPage form={form} /></PanelProvider> : null
+  return view === 'page' ? <PluginActivation t={t} form={form} /> : null
 }

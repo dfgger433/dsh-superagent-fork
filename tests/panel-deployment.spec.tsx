@@ -9,6 +9,19 @@ import { usePanel, mount, remount, settle, all, find, tab, click, type, text, fi
 import { server, problemOf, fakeForm } from './fixtures/panel-server.ts'
 
 usePanel()
+it('renders PluginConfig activation fallback without a PanelProvider and does not request state after a status 404', async () => {
+  const requests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => { requests.push(url); return new Response(null, { status: 404 }) }))
+  const container = document.createElement('div'); document.body.append(container)
+  const root = createRoot(container)
+  onTestFinished(() => { act(() => { root.unmount() }); container.remove(); vi.unstubAllGlobals() })
+  await act(async () => { root.render(<PluginConfig t={translator(zh)} view="page" form={undefined} />) })
+  await settle()
+  expect(container.textContent).toContain(zh.routerActivationHint)
+  expect(requests).toEqual(['/superagent-status'])
+  expect(requests).not.toContain('/orchestrator/api/state')
+})
+
 it('saves this machine\'s settings in the Deployment settings through DSH\'s configuration form, without a restart', async () => {
   const { form: editable, mutations } = fakeForm()
   server.form = editable
@@ -89,7 +102,7 @@ it('renders the Deployment page with the derived accounts in the Plugin Manager,
   expect(field<HTMLInputElement>(zh.deploymentPromptMaxChars).disabled).toBe(false)
   server.down = true
   await render('page')
-  expect(text()).toContain(zh.hostNotRunning)
+  expect(text()).toContain(zh.routerActivationFailed)
 })
 
 it('tells a dsh-superagent that is starting from a browser that cannot write on the Deployment page', async () => {

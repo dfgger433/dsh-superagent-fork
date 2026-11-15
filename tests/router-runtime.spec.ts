@@ -2,6 +2,55 @@
 import { afterEach, expect, it } from 'vitest'
 import { startRuntime, type Host } from './fixtures/host.ts'
 import { KV } from '../src/kv.ts'
+import { Context } from '@deepseek-ai/cordis'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { apply } from '../src/index.ts'
+import { Config } from '../src/deployment.ts'
+
+it('boots the actual Host and Runtime from fresh default configuration and serves settings before GitHub setup', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'superagent-first-install-'))
+  const root = new Context(), agentCtx = new Context()
+  const registered = new Map<string, unknown>()
+  const routes = new Map<string, (req: unknown, res: unknown) => Promise<void>>()
+  agentCtx.reflect.provide('tools', { register: (tool: { name: string }) => { registered.set(tool.name, tool); return () => registered.delete(tool.name) },
+    get: () => undefined, restrict: () => () => {}, guard: () => () => {} })
+  agentCtx.reflect.provide('skills', { register: () => () => {} })
+  agentCtx.reflect.provide('systemPrompt', { section: () => () => {} })
+  const agent = { id: 'fresh-router', ctx: agentCtx, status: 'idle', session: { header: { agentPreset: 'dsh-superagent-router' }, snapshotEvents: () => [] }, cancel: () => {}, whenIdle: async () => {} }
+  const target = { ...agent, id: 'target-router' }
+  const services = {
+    subprocess: {}, sessionController: { resolveAgent: async (id: string) => id === target.id ? { agent: target } : { error: { code: 'session/not-found' } } }, workspaceRegistry: {}, permissionPresets: {}, tools: {}, systemPrompt: {}, skills: {}, llm: {},
+    agents: { list: () => [agent], get: (id: string) => id === agent.id ? agent : undefined },
+    agentPresets: { presetForSession: () => 'dsh-superagent-router' },
+    webServer: { host: '127.0.0.1', port: 1234, register: (route: { path: string; handler: (req: unknown, res: unknown) => Promise<void> }) => {
+      routes.set(route.path, route.handler); return () => routes.delete(route.path)
+    } }, sessionPersistence: { flush: async () => {} },
+  }
+  for (const [key, value] of Object.entries(services)) root.reflect.provide(key, value)
+  // Parse the exact empty configuration a fresh bundle row supplies, isolating only its state directory.
+  const config = Config({})
+  config.stateDir = dir
+  const plugin = root.plugin({ name: 'first-install-smoke', apply: ctx => apply(ctx, config) })
+  try {
+    await plugin.await()
+    const call = async (path: string, route: string, body?: unknown) => {
+      let status = 0, text = ''
+      await routes.get(route)!({ method: body ? 'POST' : 'GET', url: path, headers: { host: '127.0.0.1:1234', 'x-orchestrator-request': '1' },
+        async *[Symbol.asyncIterator]() { if (body) yield Buffer.from(JSON.stringify(body)) } },
+        { writeHead: (code: number) => { status = code }, end: (value: string) => { text = value } })
+      return { status, value: JSON.parse(text) }
+    }
+    const activation = await call('/superagent-status', '/superagent-status')
+    expect(activation.value.error).toBeUndefined()
+    expect(activation).toMatchObject({ status: 200, value: { state: 'active', configured: false, sessionId: 'fresh-router' } })
+    expect(registered.has('orchestrator_chat_intake')).toBe(true)
+    expect(await call('/orchestrator/api/state', '/orchestrator')).toMatchObject({ status: 200, value: { setup: { problem: { code: 'repositoryUnset' } } } })
+    expect(await call('/superagent-status', '/superagent-status', { sessionId: target.id })).toMatchObject({ status: 200, value: { sessionId: target.id } })
+    expect(await call('/superagent-status', '/superagent-status', { sessionId: 'missing' })).toMatchObject({ status: 409 })
+  } finally { await plugin.dispose(); await agentCtx.fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
+})
 let h: Host | undefined
 afterEach(async () => { await h?.stop(); h = undefined })
 function user(id: string, text: string) {
@@ -29,6 +78,8 @@ it('adopts the user Session, routes one durable local request once and returns w
   const routed = await h.route({ kind: 'accept', trigger_id: first.trigger_id, title: 'Fix regression', worktree_name: 'fix-regression', acknowledgement: 'Working on the regression.' })
   await runtime.idle()
   expect(runtime.store.tickets.list()).toHaveLength(1)
+  expect(() => runtime.transferRouter('another-router')).toThrow('no Tickets')
+  expect(runtime.store.get(KV.runtime.routerOwner)).toBe('user-router')
   const id = (routed.ticket as { ticket_id: string }).ticket_id
   await h.runTool(`worker-${id}`, 'orchestrator_report', { state: 'ready', summary: 'Regression fixed' })
   await runtime.idle()
