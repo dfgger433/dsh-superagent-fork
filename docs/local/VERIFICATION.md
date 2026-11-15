@@ -51,13 +51,19 @@
 
 ## 0.3.2 深度扫描与隔离修复
 
-最终完整检查：**1,213 passed / 30 skipped**，64 test files passed / 1 skipped，TypeScript 与全部 6 个构建入口通过。深度扫描后重新完整验证同样通过；单独的跨入口 CLI error、Router tool-shadow identity 与 lifecycle focused 回归也通过。
+最终完整检查：**1,213 passed / 30 skipped**，64 test files passed / 1 skipped，TypeScript 与全部 6 个构建入口通过。深度扫描后重新完整验证同样通过；单独的跨入口 CLI error、Router tool-shadow identity 与 lifecycle focused 回归也通过。升级为0.3.3后再次完整检查：**1,213 passed / 30 skipped**，构建通过。
 
 修复了多个 Runtime 都订阅全局 Worker 事件时，外部实例的事件会在其他实例累积 personal 状态并排入无效后台任务的问题；现在先验证事件 Ticket 属于本 Runtime。故障注入测试确认 foreign Worker 状态、inbox 与 session 事件均不产生本地后台处理。
 
 另外，per-Session restart 与 Agent disposal 现在原子排序并复查 Agent generation，不会重挂已释放会话；实例停止失败时仍会清理 Runtime registry 和 Router guards；Runtime 构造中途失败时回滚已注册 Source/chat listener；Worker 释放的异步拒绝会被及时观察。Router guard 比较真实已注册工具的执行函数身份，防止其他插件用同名 scoped tool 替换已允许的路由工具。本地 Executor 显式配置与 Router 项目目录相同时仍会执行用户的 prepare 命令。
 
 现场验证仍有 7 个独立 Superagent 实例正常运行；模型提供器和远端服务使用测试替身，本轮没有执行真实 GitHub/飞书写入。
+
+## 0.3.3 深度扫描与 Worker 模块导入
+
+最终 `pnpm check`：**1,213 passed / 30 skipped**，类型检查、65个测试文件和全部独立构建入口通过。额外用运行中的 Desktop Electron + ASAR 锚点，实际 `require.resolve` 并 `import()` 15个内部 Worker 模块（persona、instructions、bash/pwsh sandbox和tools、fs/search、jobs、skills、subagent/delegation、todo、web），均可加载且导出Cordis plugin。仅Host没有授予子任务会话的情况下不直接尝试本地游戏项目写操作。
+
+用户指定 session-4d4d6c48-2d79-4c9c-9c0d-aeb5c7faf7d5 的历史回执报告 `@deepseek-ai/dsh-persona` 缺失；本轮验证发现当前Electron安装锚点该包及全部14个同组运行包都能解析，故它不是当前安装态缺件。无法安全地伪造用户会话来重放失败步骤；Worker动态挂载回滚会把具体模块加载错误留在该Ticket Worker启动失败报告中，便于下次真实任务定位。
 
 ## 边界
 

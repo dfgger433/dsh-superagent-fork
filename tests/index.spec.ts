@@ -3,12 +3,12 @@ import { expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { Config } from '../src/deployment.ts'
 import { apply } from '../src/index.ts'
-const runtimes = vi.hoisted(() => [] as { stop: ReturnType<typeof vi.fn>; router: unknown }[])
+const runtimes = vi.hoisted(() => [] as { stop: ReturnType<typeof vi.fn>; router: unknown; machine: any }[])
 vi.mock('../src/app/runtime.ts', () => ({ Runtime: class {
   ready = Promise.resolve(); masterId = 'user-session'
   store = { settings: () => ({ paused: false }) }
   stop = vi.fn(async () => {})
-  constructor(_ctx: unknown, _machine: unknown, _restart: unknown, readonly router: unknown) { runtimes.push(this) }
+  constructor(_ctx: unknown, readonly machine: any, _restart: unknown, readonly router: unknown) { runtimes.push(this) }
   configured() { return true }
 } }))
 function context() {

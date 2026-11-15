@@ -112,8 +112,8 @@ export class Sessions {
   /** Subscribes to host agent and session events so newly created sessions are decorated and model-budget retries are reflected in health. Call once at startup. */
   install(): void {
     const ctx = this.ctx
-    ctx.on('agent/disposed', ({ agent }) => {
-      this.release(agent)
+    ctx.on('agent/disposed', async ({ agent }) => {
+      await this.release(agent)
       this.retryHealth.clear(agent.id); this.updateModelHealth()
     })
     ctx.on('session/event', (session, event) => {
@@ -243,9 +243,9 @@ export class Sessions {
   private decorate(agent: Agent): Promise<void> {
     const existing = this.decorating.get(agent)
     if (existing) return existing
-    const pending = this.decorateOnce(agent).catch(error => {
+    const pending = this.decorateOnce(agent).catch(async error => {
       // A failed dynamic Worker composition must not leave a partial prompt/skill binding that blocks retry.
-      this.release(agent)
+      await this.release(agent)
       throw error
     }).finally(() => { this.decorating.delete(agent) })
     this.decorating.set(agent, pending)
@@ -281,6 +281,7 @@ export class Sessions {
     if (this.bindings.get(agent) !== binding) return
     if (!master) {
       const release = await mountWorker(agent)
+      if (this.bindings.get(agent) !== binding) { await release(); return }
       binding.disposers.push(release)
     }
     const register = this.registerTool(agent, binding)
@@ -368,21 +369,23 @@ export class Sessions {
     return version
   }
   /** Releases registrations for `agent` in reverse order (LIFO); disposing its skill scope releases its skills as well. */
-  private readonly releasing: Promise<unknown>[] = []
-  private release(agent: Agent): void {
+  private async release(agent: Agent): Promise<void> {
     const binding = this.bindings.get(agent)
     if (!binding) return
     this.bindings.delete(agent)
     binding.skills?.dispose()
+    const pending: Promise<unknown>[] = []
     for (const dispose of binding.disposers.splice(0).reverse()) {
-      try { const result: unknown = dispose();
-        if (result instanceof Promise) this.releasing.push(result.catch(error => { this.ctx.logger.warn('dsh-superagent Agent cleanup failed: %s', String(error)) })) } catch (error) { this.ctx.logger.warn('dsh-superagent could not release what it registered for a Session: %s', String(error)) }
+      try { pending.push(Promise.resolve(dispose())) }
+      catch (error) { pending.push(Promise.reject(error)) }
     }
+    const results = await Promise.allSettled(pending)
+    for (const result of results) if (result.status === 'rejected')
+      this.ctx.logger.warn('dsh-superagent could not release a Session registration: %s', String(result.reason))
   }
   /** Releases prompt sections, skills, and tools registered by `Sessions` across all decorated agents. */
   async dispose(): Promise<void> {
     await Promise.allSettled(this.decorating.values())
-    for (const agent of [...this.bindings.keys()]) this.release(agent)
-    await Promise.allSettled(this.releasing.splice(0))
+    await Promise.all([...this.bindings.keys()].map(agent => this.release(agent)))
   }
 }

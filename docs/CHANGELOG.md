@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.3.2 — Deep-scan lifecycle and Router-boundary fixes
+## 0.3.3 — Deep runtime and Worker composition verification
 
-- Ignore Worker inbox/status/session events for Tickets owned by other Runtime instances; do not enqueue foreign background work or alter local personal follow-up timing.
-- Atomically serialize per-Session release/restart and revalidate Agent identity after cleanup; disposal during account-triggered restart cannot remount an obsolete Agent.
-- Keep exact tool implementation identity in the Router guard so same-name scoped tool overrides are denied.
+- Roll back partially constructed Runtime listeners and Source registrations before closing its database and lock.
+- Observe asynchronous Agent-scope Worker composition disposers so failures cannot become unhandled rejections.
+- Keep the final build split into independent Host entries; import Worker shell execution-scope directly rather than leaking its private exports across a stable HMR-cached entry.
+- Validate that the installed Worker dependency modules resolve in the running Desktop archive.
+
+## 0.3.2 — Deep-scan lifecycle and Router-boundary fixes
 
 - Serialize per-Session release/restart and revalidate the live Agent generation before remounting; disposing a Router while it restarts can no longer resurrect it.
 - Clear Runtime registry entries and root capability guards in `finally`, even when instance shutdown rejects. Runtime shutdown now attempts every cleanup phase before reporting aggregated failures.
@@ -71,4 +74,4 @@ GitHub and optional Feishu sources, policy admission, Tickets, Worker concurrenc
 
 ### Migration
 
-Back up the old state directory before loading the Router preset fork. Existing records and pending effects remain in their original directory; independent session instances begin with new per-session local defaults. Windows prepare commands must use PowerShell syntax. See [the Router guide](ROUTER.zh.md).
+Back up the old state directory before loading the Router preset fork. Existing records and pending effects remain; the independent-session design keeps prior state and does not copy it into every new Session. Windows prepare commands must use PowerShell syntax. See [the Router guide](ROUTER.zh.md).

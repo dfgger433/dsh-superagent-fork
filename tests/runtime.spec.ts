@@ -36,7 +36,8 @@ import { preview, readable } from '../src/app/views/text.ts'
 import { decisionList, search, threadDetail, threadList } from '../src/app/views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from '../src/app/views/tickets.ts'
 
-vi.mock('../src/worker-composition.ts', () => ({ mountWorker: async () => async () => {} }))
+const workerComposition = vi.hoisted(() => ({ mountWorker: vi.fn(async () => async () => {}) }))
+vi.mock('../src/worker-composition.ts', () => workerComposition)
 
 const shimNames = (names: string[]) => names.flatMap(name => process.platform === 'win32' ? [name, `${name}.cmd`, `${name}.ps1`] : [name]).sort()
 let runtime: Runtime
@@ -1687,6 +1688,22 @@ it('selects its own preset again for a main Session or worker a person switched 
   await expect(presets.select.mock.results[0]!.value).rejects.toMatchObject({ code: 'agent-preset/locked' })
 })
 
+it('rolls back a partially decorated Worker and allows its composition to retry', async () => {
+  const { ticket, sessionId } = await acceptedTicket()
+  workerComposition.mountWorker.mockClear()
+  await (controller.create as (options: { sessionId: string }) => Promise<void>)({ sessionId: 'retry-child' })
+  const child = agents.get('retry-child')! as unknown as { session: { header: { parentSession?: string } } }
+  child.session.header.parentSession = sessionId
+  workerComposition.mountWorker.mockRejectedValueOnce(new Error('missing Worker module'))
+  const sessions = runtime.sessions as unknown as { decorate(agent: unknown): Promise<void>; bindings: Map<unknown, unknown> }
+  await expect(sessions.decorate(child)).rejects.toThrow('missing Worker module')
+  expect(sessions.bindings.has(child)).toBe(false)
+  workerComposition.mountWorker.mockResolvedValueOnce(async () => {})
+  await sessions.decorate(child)
+  expect(sessions.bindings.has(child)).toBe(true)
+  expect(workerComposition.mountWorker).toHaveBeenCalledTimes(2)
+  runtime.engine.stopTicket(ticket.id)
+})
 it('gives a subagent of a worker only the worker\'s work tools, and none once the ticket ended', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   // DSH creates the subagent under the standard preset, with the worker's Session as its parent.
