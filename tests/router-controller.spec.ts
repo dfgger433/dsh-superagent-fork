@@ -48,6 +48,23 @@ it('activates different IDs concurrently and serializes release plus reuse for t
   expect(mount).toHaveBeenCalledTimes(3)
   await controller.stop()
 })
+it('serializes restart against disposal and does not remount an obsolete Agent generation', async () => {
+  const stopping = gate(), oldStop = vi.fn(async () => { await stopping.promise }), newStop = vi.fn(async () => {})
+  let mounts = 0
+  const controller = new RouterController<{ id: string; generation: number }>(async agent => { mounts++; return { stop: agent.generation === 1 ? oldStop : newStop } })
+  const old = { id: 'same-session', generation: 1 }
+  let current = old
+  await controller.use(old)
+  const restart = controller.restart(old, () => current === old)
+  await Promise.resolve(); await Promise.resolve()
+  current = { id: 'same-session', generation: 2 }
+  const release = controller.release(old.id)
+  stopping.resolve(); await Promise.all([restart, release])
+  expect(controller.status(old.id).state).toBe('inactive')
+  expect(newStop).not.toHaveBeenCalled()
+  expect(oldStop).toHaveBeenCalledTimes(1)
+  expect(mounts).toBe(1)
+})
 it('drains all in-flight activations, stops each, and never mounts after unload', async () => {
   const ready = gate(), began = gate()
   const stop = vi.fn(async () => {})

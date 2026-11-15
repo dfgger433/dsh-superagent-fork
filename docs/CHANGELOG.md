@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2 — Deep-scan lifecycle and Router-boundary fixes
+
+- Ignore Worker inbox/status/session events for Tickets owned by other Runtime instances; do not enqueue foreign background work or alter local personal follow-up timing.
+- Atomically serialize per-Session release/restart and revalidate Agent identity after cleanup; disposal during account-triggered restart cannot remount an obsolete Agent.
+- Keep exact tool implementation identity in the Router guard so same-name scoped tool overrides are denied.
+
+- Serialize per-Session release/restart and revalidate the live Agent generation before remounting; disposing a Router while it restarts can no longer resurrect it.
+- Clear Runtime registry entries and root capability guards in `finally`, even when instance shutdown rejects. Runtime shutdown now attempts every cleanup phase before reporting aggregated failures.
+- Roll back Source/chat disposers when Runtime construction fails synchronously.
+- Ignore global Worker lifecycle events for Tickets not owned by the receiving Runtime, preventing foreign-session activity from polluting another instance's in-memory state or scheduling background work.
+- Bind Router authorization to the exact registered tool implementation, not only its name, to reject same-name scoped overrides.
+- Preserve an explicitly configured local `prepare` command when the selected output directory equals the Router project.
+- Track asynchronous Agent-scope composition disposal failures immediately instead of leaving cleanup rejections unobserved.
+
 ## 0.3.0 — Independent Superagent per conversation
 
 - Every root Superagent Session starts its own instance automatically, with a deterministic private state directory, SQLite store, settings, prompts, Sources and queues.
@@ -34,14 +48,12 @@
 - Remove the duplicated main-session navigation button that could produce an unhandled missing-session error.
 - Add an unmocked Host + Runtime first-install test checking Router tools and HTTP settings routes before GitHub setup.
 
-Existing linked installations need a DSH restart to load the new Host module. Retain the selected Router Session and configure repository/account Sources after restart.
-
 ## 0.2.0 — Router preset fork
 
 ### Changed
 
-- Selecting **Superagent Router** binds the user's root conversation as the deployment Router. Bundle installation and eager preset loading stay idle.
-- Deployment ownership is durable and unique per state directory. A second Router is refused with the owner Session ID; reopening the owner resumes its queues.
+- Selecting **Superagent Router** binds each user's root conversation as its own independent deployment instance. Bundle installation and eager preset loading stay idle.
+- State databases and queues are isolated per root Session ID, allowing several Routers to run concurrently without sharing Runtime services.
 - Worker subprocess environments are scoped to Superagent Router, Worker and worker-child compositions instead of changing the DSH process environment.
 - Windows supports native absolute paths, PowerShell prepare commands and Windows CLI wrappers. Linux shell execution remains available.
 - Requires DSH `^0.2.2-rc.3`; package version moves from the prototype's 0.1 series because activation and main-session ownership changed.
@@ -59,4 +71,4 @@ GitHub and optional Feishu sources, policy admission, Tickets, Worker concurrenc
 
 ### Migration
 
-Back up the state directory and stop the prototype before loading this bundle. Select the Router preset in the intended user conversation. Existing records and pending effects remain; the old automatic main-session ID is retained as legacy metadata. Windows prepare commands must use PowerShell syntax. See [the Router guide](ROUTER.zh.md).
+Back up the old state directory before loading the Router preset fork. Existing records and pending effects remain in their original directory; independent session instances begin with new per-session local defaults. Windows prepare commands must use PowerShell syntax. See [the Router guide](ROUTER.zh.md).

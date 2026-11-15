@@ -25,7 +25,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   const protectedRoots = new Map<Agent, () => void>()
   const notices = new Map<Agent, () => void>()
   const protect = (agent: Agent) => {
-    if (!protectedRoots.has(agent)) protectedRoots.set(agent, protectRouter(agent, () => runtimes.get(agent.id)?.routerToolNames ?? new Set()))
+    if (!protectedRoots.has(agent)) protectedRoots.set(agent, protectRouter(agent, () => runtimes.get(agent.id)?.routerToolNames ?? new Map()))
   }
   // Only this coordinator is global: it resolves an owned Worker environment without sharing Runtime services or state.
   ctx.provide('superagentCoordinator', { environmentFor(id: string) {
@@ -36,7 +36,9 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     const isolated = ctx.isolate('orchestrator')
     let runtime: Runtime | undefined
     const restart = () => {
-      void controller.release(agent.id).then(() => controller.use(agent)).catch(error => { errors.set(agent.id, String(error)); ctx.logger.error(String(error)) })
+      void controller.restart(agent, () => ctx.agents.get(agent.id) === agent && selected(agent))
+        .then(() => { ctx.get('settings')?.describe() })
+        .catch(error => { errors.set(agent.id, String(error)); ctx.logger.error(String(error)) })
     }
     const mounted = isolated.plugin({ name: 'superagent-session-deployment', inject, apply(child: Context) {
       const snapshot = <T>(ref: { get(): T }) => { const value = ref.get(); return { ...ref, get: () => value } }
@@ -46,7 +48,10 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
         admissionContextTimeoutMs: snapshot(machine.admissionContextTimeoutMs) as typeof machine.admissionContextTimeoutMs }
       runtime = new Runtime(child, perSession, restart, agent, true)
       runtimes.set(agent.id, runtime)
-      child.effect(() => async () => { await runtime!.stop(); if (runtimes.get(agent.id) === runtime) runtimes.delete(agent.id) })
+      child.effect(() => async () => {
+        try { await runtime!.stop() }
+        finally { if (runtimes.get(agent.id) === runtime) runtimes.delete(agent.id) }
+      })
       // Each Source resolves the same isolated orchestrator provider, so configuration and cursors cannot cross Sessions.
       const github = child.plugin(githubSource), feishu = child.plugin(feishuSource)
       return Promise.all([runtime.ready, github.await(), feishu.await()]).then(() => undefined)
@@ -110,21 +115,27 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     const agent = ctx.agents.get(id as Agent['id'])
     if (agent && selected(agent)) return activate(agent)
     if (agent && preset !== ROUTER_PRESET) {
+      errors.delete(id)
       protectedRoots.get(agent)?.(); protectedRoots.delete(agent)
       notices.get(agent)?.(); notices.delete(agent)
       return controller.release(id)
     }
   })
   ctx.on('agent/disposed', async ({ agent }) => {
+    errors.delete(agent.id)
     protectedRoots.get(agent)?.(); protectedRoots.delete(agent)
     notices.get(agent)?.(); notices.delete(agent)
     await controller.release(agent.id)
   })
   ctx.effect(() => async () => {
-    await controller.stop()
-    for (const release of protectedRoots.values()) release()
-    for (const release of notices.values()) release()
-    protectedRoots.clear(); notices.clear()
+    let stopError: unknown
+    try { await controller.stop() } catch (error) { stopError = error }
+    finally {
+      for (const release of protectedRoots.values()) release()
+      for (const release of notices.values()) release()
+      protectedRoots.clear(); notices.clear(); errors.clear()
+    }
+    if (stopError) throw stopError
   })
   await Promise.all(ctx.agents.list().filter(selected).map(activate))
   ctx.logger.info('Superagent ready: each selected root Session owns an independent instance')

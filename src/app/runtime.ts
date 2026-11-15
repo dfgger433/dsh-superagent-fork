@@ -202,7 +202,10 @@ export class Runtime extends Service implements SourceHost {
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
     } catch (error) {
-      // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
+      // Roll back every in-process listener/source registration before closing the Store they reference.
+      for (const dispose of this.disposers.splice(0).reverse()) {
+        try { dispose() } catch (cleanupError) { ctx.logger.warn('dsh-superagent construction cleanup failed: %s', String(cleanupError)) }
+      }
       try { opened?.close() } finally { release() }
       throw error
     }
@@ -250,7 +253,7 @@ export class Runtime extends Service implements SourceHost {
       this.store.set(KV.runtime.masterId, sessionId)
     })
   }
-  get routerToolNames(): ReadonlySet<string> { return this.sessions.allowedRouterTools }
+  get routerToolNames(): ReadonlyMap<string, Function> { return this.sessions.allowedRouterTools }
   checkSetup(): void { this.setup.check() }
   private quietlyAttach(ticketId: string, triggerId: string): void {
     this.quiet++
@@ -302,26 +305,27 @@ export class Runtime extends Service implements SourceHost {
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
   private async shutdown(): Promise<void> {
     this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
+    const failures: unknown[] = []
+    const settle = async (work: () => unknown | Promise<unknown>): Promise<void> => {
+      try { await work() } catch (error) { failures.push(error) }
+    }
     try {
-      this.assessor.stop()
+      await settle(() => this.assessor.stop())
       const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
       const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
-      for (const agent of agents) agent.cancel({ kind: 'user' }, { keepInbox: true })
+      for (const agent of agents) await settle(() => agent.cancel({ kind: 'user' }, { keepInbox: true }))
       await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])
-      // The workers' jobs and subagents stop too: their ends would start worker turns without the tool limits released below.
-      await this.executor.shutdown()
-      this.executor.dispose()
-      await this.sessions.dispose()
-      for (const dispose of this.disposers.reverse()) dispose()
-      await this.ctx.sessionPersistence.flush()
+      await settle(() => this.executor.shutdown())
+      await settle(() => this.executor.dispose())
+      await settle(() => this.sessions.dispose())
+      for (const dispose of this.disposers.splice(0).reverse()) await settle(dispose)
+      await settle(() => this.ctx.sessionPersistence.flush())
     } finally {
-      // Close the database before releasing the directory lock so another process cannot open the database mid-write; a compromised lock may already be released.
       this.setup.restore()
-      try { this.store.close() } finally {
-        const unreleased = (error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release its state directory lock: %s',
-          String(error)) }
-        await this.releaseLock?.().catch(unreleased)
-      }
+      // A failed cleanup must never keep the per-instance database lock or its API object alive.
+      await settle(() => this.store.close())
+      await settle(() => this.releaseLock?.())
     }
+    if (failures.length) throw new AggregateError(failures, 'Superagent Runtime shutdown had cleanup failures')
   }
 }

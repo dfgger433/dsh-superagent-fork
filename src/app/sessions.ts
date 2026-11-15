@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
-import { scopeParentOf } from '@deepseek-ai/dsh-scope'
+import { scopeOf, scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { dirname } from 'node:path'
 import { z } from 'zod'
@@ -95,7 +95,7 @@ function noWait({ name, arguments: input }: { name: string; arguments: unknown }
  * Feeds session events into `RetryHealth` to report model budget waits on the `models` `HealthEntry`, and durably records which prompt revisions each session has worked under in `Store` (`KV.sessions.prompts`) to authorize prompt version reads.
  */
 export class Sessions {
-  readonly allowedRouterTools = new Set<string>()
+  readonly allowedRouterTools = new Map<string, Function>()
   private readonly agentDelivery: AgentDelivery
   /** Decorated agents mapped to their registered disposers and skill scope until the agent is disposed or `Sessions.dispose()` runs. */
   private readonly bindings = new Map<Agent, SessionBinding>()
@@ -243,7 +243,11 @@ export class Sessions {
   private decorate(agent: Agent): Promise<void> {
     const existing = this.decorating.get(agent)
     if (existing) return existing
-    const pending = this.decorateOnce(agent).finally(() => { this.decorating.delete(agent) })
+    const pending = this.decorateOnce(agent).catch(error => {
+      // A failed dynamic Worker composition must not leave a partial prompt/skill binding that blocks retry.
+      this.release(agent)
+      throw error
+    }).finally(() => { this.decorating.delete(agent) })
     this.decorating.set(agent, pending)
     return pending
   }
@@ -281,11 +285,13 @@ export class Sessions {
     }
     const register = this.registerTool(agent, binding)
     const tools = host.tools(agent, ticket)
-    if (master) for (const tool of tools) this.allowedRouterTools.add(tool.name)
     for (const tool of tools) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
-      const allowed = new Set(tools.map(tool => tool.name))
-      binding.disposers.push(protectRouter(agent, () => allowed))
+      for (const tool of tools) {
+        const registered = agent.ctx.tools.get(tool.name, scopeOf(agent.ctx))
+        if (registered) this.allowedRouterTools.set(tool.name, registered.execute)
+      }
+      binding.disposers.push(protectRouter(agent, () => this.allowedRouterTools))
     } else {
       binding.disposers.push(...this.workOnly(agent, ticket!.id))
     }
@@ -369,7 +375,8 @@ export class Sessions {
     this.bindings.delete(agent)
     binding.skills?.dispose()
     for (const dispose of binding.disposers.splice(0).reverse()) {
-      try { const result: unknown = dispose(); if (result instanceof Promise) this.releasing.push(result) } catch (error) { this.ctx.logger.warn('dsh-superagent could not release what it registered for a Session: %s', String(error)) }
+      try { const result: unknown = dispose();
+        if (result instanceof Promise) this.releasing.push(result.catch(error => { this.ctx.logger.warn('dsh-superagent Agent cleanup failed: %s', String(error)) })) } catch (error) { this.ctx.logger.warn('dsh-superagent could not release what it registered for a Session: %s', String(error)) }
     }
   }
   /** Releases prompt sections, skills, and tools registered by `Sessions` across all decorated agents. */

@@ -19,12 +19,24 @@ export class RouterController<A extends RouterAgent = RouterAgent> {
   }
   release(id: string): Promise<void> {
     if (this.closed) return this.stopping ?? Promise.resolve()
-    return this.run(id, async () => {
-      const instance = this.instances.get(id)
-      if (!instance) return
-      this.instances.delete(id)
-      await instance.stop()
+    return this.run(id, async () => { await this.stopOne(id) })
+  }
+  /** Stop and optionally remount one ID atomically in its per-session queue. */
+  restart(agent: A, current: () => boolean): Promise<void> {
+    if (this.closed) return this.stopping ?? Promise.resolve()
+    return this.run(agent.id, async () => {
+      await this.stopOne(agent.id)
+      if (this.closed || !current()) return
+      const mount = await this.mount(agent)
+      if (this.closed || !current()) { await mount.stop(); return }
+      this.instances.set(agent.id, mount)
     })
+  }
+  private async stopOne(id: string): Promise<void> {
+    const instance = this.instances.get(id)
+    if (!instance) return
+    this.instances.delete(id)
+    await instance.stop()
   }
   stop(): Promise<void> {
     if (this.stopping) return this.stopping
@@ -32,9 +44,9 @@ export class RouterController<A extends RouterAgent = RouterAgent> {
     this.stopping = (async () => {
       // No new operations can enter; activations already in progress may still publish their mounts.
       await Promise.allSettled([...this.chains.values()])
-      const instances = [...this.instances.values()]
+      const instances = [...this.instances.entries()]
       this.instances.clear()
-      const results = await Promise.allSettled(instances.map(instance => Promise.resolve().then(() => instance.stop())))
+      const results = await Promise.allSettled(instances.map(([, instance]) => Promise.resolve().then(() => instance.stop())))
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : [])
       if (failures.length) throw new AggregateError(failures, 'Could not stop every Superagent instance')
     })()

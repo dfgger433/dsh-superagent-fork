@@ -1,5 +1,5 @@
 /** User-owned Router integration through real Engine, Store, Effects and Worker adapters. */
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { startRuntime, type Host } from './fixtures/host.ts'
 import { KV } from '../src/kv.ts'
 import { Context } from '@deepseek-ai/cordis'
@@ -103,6 +103,17 @@ function user(id: string, text: string) {
     id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }],
   } } as never)
 }
+it('honors an explicit local prepare command even when the configured directory is the Router project', async () => {
+  h = await startRuntime(undefined, true, true)
+  const current = h.runtime.store.settings()
+  h.runtime.store.saveSettings({ ...current, executor: { ...current.executor, directory: h.directory, prepare: 'Write-Output prepared' } })
+  user('custom-prepare', 'Check a prepared local task')
+  const intake = await h.runTool('user-router', 'orchestrator_chat_intake', { message_id: 'custom-prepare' })
+  await h.runtime.idle()
+  await h.route({ kind: 'accept', trigger_id: intake.trigger_id, title: 'Prepared', worktree_name: 'prepared', acknowledgement: 'Starting.' })
+  await h.runtime.idle()
+  expect(h.subprocess.spawn.mock.calls.some(([spec]) => spec.argv[0] === 'pwsh')).toBe(true)
+})
 it('adopts the user Session, routes one durable local request once and returns worker reports there', async () => {
   h = await startRuntime(store => { store.set(KV.runtime.masterId, 'legacy-orchestrator') }, true)
   const { runtime } = h
@@ -131,6 +142,17 @@ it('adopts the user Session, routes one durable local request once and returns w
   expect(h.deliveries.mock.calls.some(([call]) => call.sessionId === 'user-router' && call.text.includes('Regression fixed'))).toBe(true)
   expect(runtime.environmentFor('unrelated')).toBeUndefined()
   expect(runtime.environmentFor('user-router')).toBeUndefined()
+})
+it('ignores Worker lifecycle events from another Superagent instance', async () => {
+  h = await startRuntime(undefined, true, true)
+  const executor = h.runtime.executor as unknown as { personal: Map<string, string>; background(work: Promise<void>): Promise<void> }
+  const background = vi.spyOn(executor, 'background')
+  const otherTicket = 'a'.repeat(32)
+  h.ctx.emit('agent/inbox/claimed', { agent: { id: `worker-${otherTicket}` }, message: { source: { kind: 'user' } } } as never)
+  h.ctx.emit('agent/status', { agent: { id: `worker-${otherTicket}` }, status: 'idle' } as never)
+  h.ctx.emit('session/event', { id: `worker-${otherTicket}` } as never, { type: 'user/message', data: { source: { kind: 'dsh-superagent' } } } as never)
+  expect(executor.personal.has(otherTicket)).toBe(false)
+  expect(background).not.toHaveBeenCalled()
 })
 it('rejects plugin relays as local requests and attaches follow-ups only to their chosen ticket', async () => {
   h = await startRuntime(undefined, true)

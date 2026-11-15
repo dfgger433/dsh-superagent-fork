@@ -177,6 +177,7 @@ beforeEach(async () => {
         // Preset tools are inherited; subagent is registered on the agent itself and cannot be named by restrict.
         get: (name: string, scope?: object) => {
           const own = scope === agents.get(sessionId)
+          if (scope !== preset && sessionTools.has(name)) return sessionTools.get(name)
           return (scope === preset || own) && inherited.includes(name) || own && name === 'subagent' ? { name } : undefined
         },
         restrict: vi.fn((rule: { allow: string[] }) => {
@@ -1497,7 +1498,8 @@ it('fails a ticket at once on a worker error that is not passing, and relays it'
 })
 
 it('refuses every root Router shell or job call and permits only exact orchestration tools', async () => {
-  const main = guards.get(runtime.masterId)!
+  const router = agents.get(runtime.masterId)!
+  const main = (execution: { name: string; arguments?: unknown }) => guards.get(runtime.masterId)!({ ...execution, agent: router } as never)
   for (const name of ['bash', 'pwsh', 'job_output', 'write', 'edit', 'orchestrator_fake']) {
     for (const args of [{}, { command: 'echo safe', timeoutMs: 5000 }, { wait: false }, { run_in_background: true }]) {
       expect(main({ name, arguments: args })).toMatch(/^The Router may only use/)
@@ -1522,7 +1524,8 @@ it('keeps the root Router boundary when preset lookup is absent, standard, or th
     services.agentPresets = registry
     services.sessionProjections = { stateOf: vi.fn(() => 'standard') }
     await (await restart()).ready
-    const main = guards.get(runtime.masterId)!
+    const router = agents.get(runtime.masterId)!
+    const main = (execution: { name: string; arguments?: unknown }) => guards.get(runtime.masterId)!({ ...execution, agent: router } as never)
     expect(main(route)).toBeUndefined()
     expect(main(watch)).toMatch(/^The Router may only use/)
     expect(main({ name: 'pwsh', arguments: { command: 'echo safe' } })).toMatch(/^The Router may only use/)

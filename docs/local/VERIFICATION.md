@@ -49,6 +49,16 @@
 
 旧单部署数据库原地保留，不复制其配置/任务到全部新实例，避免历史任务被重复恢复。0.3.0的新实例使用私有本地默认值。共享Host配置仅作为新实例模板，已运行实例读取其创建时的机器参数快照。若用户显式让多个实例操作同一个磁盘项目，项目文件仍是用户选定的同一路径；隔离的是Superagent实例、状态、权限与任务归属。
 
+## 0.3.2 深度扫描与隔离修复
+
+最终完整检查：**1,213 passed / 30 skipped**，64 test files passed / 1 skipped，TypeScript 与全部 6 个构建入口通过。
+
+修复了多个 Runtime 都订阅全局 Worker 事件时，外部实例的事件会在其他实例累积 personal 状态并排入无效后台任务的问题；现在先验证事件 Ticket 属于本 Runtime。故障注入测试确认 foreign Worker 状态、inbox 与 session 事件均不产生本地后台处理。
+
+另外，per-Session restart 与 Agent disposal 现在原子排序并复查 Agent generation，不会重挂已释放会话；实例停止失败时仍会清理 Runtime registry 和 Router guards；Runtime 构造中途失败时回滚已注册 Source/chat listener；Worker 释放的异步拒绝会被及时观察。Router guard 比较真实已注册工具的执行函数身份，防止其他插件用同名 scoped tool 替换已允许的路由工具。本地 Executor 显式配置与 Router 项目目录相同时仍会执行用户的 prepare 命令。
+
+现场验证仍有 7 个独立 Superagent 实例正常运行；模型提供器和远端服务使用测试替身，本轮没有执行真实 GitHub/飞书写入。
+
 ## 边界
 
 模型和远端使用测试替身；真实远端授权/投递、飞书账号、安装后的渲染及图标尚未验证。Linux 专属脚本本次未在 Linux 主机重跑。没有将 mock 主会话集成测试称为真实模型端到端验证。
