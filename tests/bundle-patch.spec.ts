@@ -1,13 +1,14 @@
 /** The public preset is tool-free; Engine-owned workers receive a separate Agent-scoped composition. */
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { expect, it } from 'vitest'
 import ToolsService from '@deepseek-ai/dsh-tools'
 import { ROUTER_PRESET } from '../src/app/sessions.ts'
-import { mountWorker, workerModules, SUPERAGENT_PRESET, type WorkerModuleLoader } from '../src/worker-composition.ts'
+import { mountWorker, resolveWorkerModulePath, workerModules, SUPERAGENT_PRESET, type WorkerModuleLoader } from '../src/worker-composition.ts'
 
 interface Row { id?: string; name: string; config?: Record<string, unknown> & { plugins?: Row[] } | Row[] }
 async function patched(): Promise<Row[]> {
@@ -45,6 +46,19 @@ it('keeps execution tools in the internal composition with native shell, bounded
     for (const name of ['@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-skill']) expect(modules.some(row => row.name === name)).toBe(true)
   }
 })
+it('resolves Worker packages from the profile package root when the bundled app root has no package', () => {
+  const root = mkdtempSync(join(tmpdir(), 'superagent-worker-resolution-'))
+  try {
+    const packageRoot = join(root, 'node_modules', '@deepseek-ai', 'dsh-persona')
+    mkdirSync(join(packageRoot, 'lib'), { recursive: true })
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-persona', main: 'lib/index.js' }))
+    writeFileSync(join(packageRoot, 'lib', 'index.js'), 'export default {}')
+    expect(resolveWorkerModulePath('@deepseek-ai/dsh-persona', [join(root, 'bundled-app'), root])).toBe(join(packageRoot, 'lib', 'index.js'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 it('mounts worker modules only in the requested Agent scope and shares one private subprocess realm with all shell consumers', async () => {
   const root = new Context(), worker = {}, other = {}
   const scope = createScope(root, worker), ordinary = createScope(root, other)

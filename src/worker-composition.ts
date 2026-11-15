@@ -2,6 +2,7 @@
 import type { Context, Fiber, Plugin } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createRequire } from 'node:module'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { apply as applyExecutionScope, inject as executionScopeInject } from './execution-scope.ts'
 
@@ -26,8 +27,31 @@ export const workerModules = (platform = process.platform): WorkerModule[] => [
 
 export type WorkerModuleLoader = (name: string) => Promise<Plugin>
 const require = createRequire(import.meta.url)
+
+/**
+ * DSH keeps shared packages in the profile parent while the Desktop Host's
+ * `DSH_INSTALL_DIR` points at the bundled app. Search both layouts so dynamic
+ * Worker composition uses the packages installed by the running Host.
+ */
+export function workerModuleSearchPaths(): string[] {
+  const profile = process.env.DSH_PROFILE_DIR ?? (process.env.DSH_HOME
+    ? join(process.env.DSH_HOME, 'profiles', process.env.DSH_PROFILE ?? 'default')
+    : undefined)
+  return [...new Set([process.env.DSH_INSTALL_DIR, profile, import.meta.dirname, process.cwd()].filter((path): path is string => !!path))]
+}
+
+export function resolveWorkerModulePath(name: string, paths = workerModuleSearchPaths()): string {
+  let lastError: unknown
+  for (const path of paths) {
+    try { return require.resolve(name, { paths: [path] }) }
+    catch (error) { lastError = error }
+  }
+  const detail = lastError instanceof Error ? `: ${lastError.message}` : ''
+  throw new Error(`Cannot resolve Worker module ${name}; searched ${paths.join(', ')}${detail}`, { cause: lastError })
+}
+
 const loadModule: WorkerModuleLoader = async name => {
-  const resolved = require.resolve(name, { paths: [process.env.DSH_INSTALL_DIR ?? import.meta.dirname] })
+  const resolved = resolveWorkerModulePath(name)
   const module = await import(pathToFileURL(resolved).href) as { default?: Plugin; apply?: Plugin }
   return (module.default ?? module) as Plugin
 }
