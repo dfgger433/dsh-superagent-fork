@@ -1,5 +1,7 @@
 # SETUP
 
+> Router preset fork: use [Router setup and migration](docs/ROUTER.zh.md) for this branch. The instructions below are the retained Linux research-prototype deployment procedure. Do not create its automatic dedicated main Session when setting up the Router preset.
+
 Instructions for an agent that sets up dsh-superagent with its operator. If you are a person, ask your coding agent to read this file and follow it.
 
 ## How to run the setup

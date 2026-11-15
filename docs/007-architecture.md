@@ -41,6 +41,14 @@ Shutdown cancels turns, waits for passes, effects and agents, restores the proce
 | Outbox | `src/app/outbox.ts` | The Engine's `Outbox` port, and the only writer of the receipts: `send` keeps a message's receipt and queues its `reply` effect in one transaction, and the effect's handler sends it through `SourceRegistry.send`; a message waits while its Source is off, and is dropped when the conversation is gone or not listened to |
 | Notices | `src/app/notices.ts` | Converts domain events and worker activity into main-Session messages. `eventNotice` handles domain notices; `reportRelay` forwards questions immediately, keeps ordinary progress on its Ticket, and relays other reports; `followupRelay` names the Tickets that own a human follow-up. Relays arriving during a turn are delivered together at its next step through the DeepSeek Harness inbox |
 
+### Router lifecycle and local chat
+
+`RouterController` (`src/app/router-controller.ts`) owns the one active deployment mount for a preset-selected Router agent. It serializes concurrent `use`, `release` and `stop` calls, reports a conflict when another agent already owns the mount, drains an activation already in flight before shutdown, and never mounts after the controller closes. Preset definitions therefore remain inert until the controller is used.
+
+The local chat path is attached to that lifecycle rather than to a remote Source. `ChatMessages` (`src/app/chat.ts`) reads the bound Router Session's persisted `user/message` events, indexes verified human text and IDs, updates from live Session events, and exposes the recent IDs used by `orchestrator_chat_messages`. `orchestrator_chat_intake` rereads the durable message by ID and sends its Trigger through the Engine; an optional Ticket ID is an explicit follow-up association. `src/sources/chat.ts` supplies the `chat` Source and a per-mount reply channel, so Router replies steer the same main Session and cannot relay back through a remote Source.
+
+Worker subprocesses are isolated by `src/execution-scope.ts`: the provider is decorated in the worker realm, resolves the current initiator and owner for each spawn, merges the owner's environment, and refuses a spawn without an authorized worker. `src/infra/cli.ts` keeps shell selection and Windows `.cmd`/`.bat`/`.ps1` invocation explicit, quotes arguments as PowerShell literals, and merges environment keys case-insensitively on Windows. The composition root mounts these pieces during startup and disposes the chat projection and deployment mount during shutdown.
+
 ### Engine
 
 `Engine` (`src/core/engine.ts`) is the only writer of Triggers, Threads, Decisions, Tickets and Assignments. It receives these ports from `src/core/ports.ts`: `Repositories`, a current-Policy getter, `SourceScope`, `Assessor`, `Executor` and `Outbox`. Optional dependencies are `prepareTicket`, `now` and `emit`.
@@ -314,6 +322,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/core/memory.ts` | `MemoryRepositories`: the Store's repositories in memory, in the Store's order and with its nested rollback, for domain tests |
 | `src/core/index.ts` | The core's exports |
 | `src/app/runtime.ts` | The Runtime, the composition root, with its start and stop |
+| `src/app/router-controller.ts` | `RouterController`, which serializes preset-owned deployment activation, one active mount, conflicts, release and shutdown |
+| `src/app/chat.ts` | `ChatMessages`, the durable Router-user message projection, recent-ID listing, and the `orchestrator_chat_messages` and `orchestrator_chat_intake` tools |
 | `src/app/setup.ts` | Setup, and `setupChanged`, whether a save changes a field setup reads |
 | `src/app/passes.ts` | Passes, the pass scheduler |
 | `src/app/outbox.ts` | The Outbox: the Engine's `Outbox` port, the receipts and the `reply` effects that send them |
@@ -352,13 +362,16 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/views/settings.ts` | The settings page's view: each block with its revision, each Source's settings with its kind's form, and the execution environment |
 | `src/app/views/overview.ts` | The overview: Tickets that need a person, problems, the last day's flow and the Executor's load |
 | `src/executor/dsh.ts` | The DshExecutor, `WorkerSlots`, `ticketExecution`, `inputMessage` and `mandateInstructions` |
+| `src/execution-scope.ts` | The worker-only subprocess decorator, per-invocation owner and environment lookup, and refusal of unowned spawns |
 | `src/executor/background.ts` | A worker's background work in DeepSeek Harness, the shell jobs its Session owns (`ctx.jobs`) and its subagents (`ctx.subagents`): `runningJobs`, `untilQuiet`, `killJobs`, `collectJobs`, `stopSubagents`, `stopBackground`, `until`, and `cancelled`, the workers whose turn a stop of their subagents cancelled |
 | `src/infra/commands.ts` | `Commands`, the CLI transport: `run`; `api` and `pages`, limited to the configured repository and validated; `lark` as the bot; `git`. `CliError` carries the code a command's output reports, such as a GitHub HTTP status, and a command that prints nothing fails with how it ended, never with its arguments; `validItems` skips and counts the malformed items of a list |
+| `src/infra/cli.ts` | Shell selection, PowerShell literal quoting for Windows scripts, `.cmd`/`.bat`/`.ps1` argument forwarding, and case-insensitive environment merging |
 | `src/infra/environment.ts` | The agent's process environment: command shims, the git configuration and credential helper, `runAsWorker`, and the checks of the environment and of a Ticket's directory |
 | `src/infra/paths.ts` | The package's root, where packaged files are |
 | `src/infra/text.ts` | Word counts and the chat message limit, `fill` and `sameName` |
 | `src/infra/health.ts` | The `HealthBoard`, every part's health entry, each claimed by its one writer |
 | `src/sources/kind.ts` | The `SourceKind` protocol |
+| `src/sources/chat.ts` | The local `chat` Source, verified Router-message Triggers, and the per-Router reply Channel |
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
 | `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
@@ -424,6 +437,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
+| `tests/router-controller.spec.ts` | Router deployment activation, one-owner conflicts, serialized release, failed activation recovery and shutdown draining |
+| `tests/router-runtime.spec.ts` | User Router adoption, local message identity and deduplication, Worker result relay and isolated follow-up routing |
+| `tests/chat.spec.ts` | Durable Router user-message projection, rejection of relay/plugin/report content, recent chat tools, stable local Triggers and reply routing |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
 | `tests/runtime-concurrency.spec.ts` | Work that overlaps: Triggers during a pass, Tickets that change during deliveries and launches |
 | `tests/http.spec.ts` | The same-origin and loopback checks, the status of each kind of failure, the body limit, path parameters and queries |
@@ -436,6 +452,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/cards.spec.ts` | The rules the built-in text must state, file by file |
 | `tests/model-surface.spec.ts` | Everything models read: tools, prompts, skills and inputs, checked against the tool schemas, the execution environment and the glossary, within a size budget per role |
 | `tests/deployment.spec.ts`, `tests/environment.spec.ts`, `tests/index.spec.ts` | The plugin configuration and setup, the agent's process environment, the plugin entry |
+| `tests/windows-execution.spec.ts` | Worker subprocess scoping, owner lookup, environment merging, POSIX and Windows CLI selection/quoting, and Windows script smoke behavior |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent` against fake `ps`, `tmux` and `dsh` |
 | `tests/client.spec.tsx`, `tests/navigation.spec.ts`, `tests/controls.spec.tsx` | The client plugin's registration and polling, Session navigation and route memory, the local controls, and the panel's imports, which have no cycle |
 | `tests/panel-overview.spec.tsx`, `panel-source.spec.tsx`, `panel-trigger.spec.tsx`, `panel-eval.spec.tsx`, `panel-execution.spec.tsx` | Each page of the panel, against a fake management API answered by route |

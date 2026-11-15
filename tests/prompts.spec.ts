@@ -58,7 +58,7 @@ it('assembles every role from fixed sections around the team sections, whatever 
 })
 
 it('reads a prompt file whatever its line ends and blank lines, and names a missing or empty one', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'prompt-file-'))
+  const dir = mkdtempSync(join(packagePath('prompts'), 'prompt-file-'))
   // promptFile resolves paths relative to prompts/; use a relative path to reach the temp dir.
   const name = (file: string) => relative(packagePath('prompts'), join(dir, file))
   try {

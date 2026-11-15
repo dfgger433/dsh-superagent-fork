@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Superagent",
-    "description": "监听单个 GitHub 仓库，把获授权的请求转为 Ticket，并在各自的 DSH 会话中执行。"
+    "description": "选择 Superagent Router 预设后，当前主会话负责交流、接收 GitHub 信息和路由，独立 Worker 执行获授权的任务。每个部署绑定一个主会话，支持 Windows 与 Linux。"
   }
 }
