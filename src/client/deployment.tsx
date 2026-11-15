@@ -108,6 +108,7 @@ function ConfigFallback({ t, form }: { t: T; form: DeploymentForm }) {
   }
   return <div className="dt-embedded">
     <p className="dt-hint">{t('routerActivationHint')}</p>
+    <p className="dt-hint">{t('deploymentGlobalDefaults')}</p>
     {form && editable ? <div className="dt-row-buttons"><label className="dt-field"><span className="dt-field-head">{t('deploymentStateDir')}</span>
       <input value={stateDir} onChange={event => setStateDir(event.target.value)} placeholder={t('deploymentStateDir')} />
       <button type="button" onClick={() => { void save() }} disabled={!stateDir.trim()}>{t('save')}</button>
@@ -115,15 +116,26 @@ function ConfigFallback({ t, form }: { t: T; form: DeploymentForm }) {
   </div>
 }
 function PluginActivation({ t, form }: { t: T; form: DeploymentForm }) {
+  const [selected, setSelected] = useState('')
   const status = usePoll(async () => {
     const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
     if (!response.ok) throw new Error(t('deploymentUnavailable'))
-    return await response.json() as { state: 'inactive' | 'active' | 'stopped'; error?: string }
+    return await response.json() as { state: 'inactive' | 'active' | 'stopped'; error?: string; instances?: { sessionId: string; state: string; error?: string }[] }
   }, [t], 10_000)
   if (status.error) return <div className="dt-embedded"><p className="dt-error" role="alert">{t('routerActivationFailed')}</p><p className="dt-hint">{status.error.message}</p><ConfigFallback t={t} form={form} /></div>
   if (!status.data || status.data.error || status.data.state !== 'active') return <div className="dt-embedded"><p className={status.data?.error ? 'dt-error' : 'dt-hint'} role={status.data?.error ? 'alert' : undefined}>{status.data?.error ? t('routerActivationFailed') : t('routerInactive')}</p>
     {status.data?.error && <p className="dt-hint">{status.data.error}</p>}<ConfigFallback t={t} form={form} /></div>
-  return <PanelProvider t={t} interval={10_000}><PluginPage form={form} /></PanelProvider>
+  const instances = status.data.instances
+  const instance = instances?.find(item => item.sessionId === selected)
+  return <>
+    {instances && <label>{t('routerInstance')} <select aria-label={t('routerInstance')} value={instance?.sessionId ?? ''} onChange={event => setSelected(event.target.value)}>
+      <option value="">{t('routerChooseInstance')}</option>
+      {instances.map(item => <option key={item.sessionId} value={item.sessionId}>{item.sessionId}</option>)}
+    </select></label>}
+    {instances && !instance ? <p className="dt-hint">{t('routerChooseInstance')}</p>
+      : instance?.error || instance && instance.state !== 'active' ? <p role="alert">{instance.error ?? t('routerInactive')}</p>
+      : <PanelProvider key={instance?.sessionId ?? 'legacy'} sessionId={instance?.sessionId} t={t} interval={10_000}><PluginPage form={instance ? undefined : form} /></PanelProvider>}
+  </>
 }
 /** DSH Plugin Manager config view entry; renders nothing in `summary` mode because DSH displays the package description. */
 export function PluginConfig({ t, view, form }: { t: T; view: 'page' | 'summary'; form: DeploymentForm }) {

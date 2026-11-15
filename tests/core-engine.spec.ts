@@ -3,16 +3,27 @@ import { Engine, MemoryRepositories, UserError, followupOwners, key, runningAssi
   waitsForPerson } from '../src/core/index.ts'
 import type { Assessor, Assignment, Candidate, EngineOptions, Executor, OutboundMessage, Outcome, Policy, Ticket, Trigger } from '../src/core/index.ts'
 
+it('namespaces Worker ticket identities when independent Routers accept the same external event at the same time', () => {
+  const a = harness({}, { namespace: 'router-a' }), b = harness({}, { namespace: 'router-b' })
+  const same = trigger('1')
+  for (const h of [a, b]) { h.engine.receive(same); h.pump() }
+  const outcome = { kind: 'accept' as const, title: 'Same task', scope: 'Same scope', reason: 'Requested' }
+  const first = a.decide(a.requests[0]!, outcome), second = b.decide(b.requests[0]!, outcome)
+  expect(first.ticketId).not.toBe(second.ticketId)
+  expect(a.repo.tickets.get(second.ticketId!)).toBeUndefined()
+  expect(b.repo.tickets.get(first.ticketId!)).toBeUndefined()
+})
 const member = { source: 'chat', id: 'alice' }
 const guest = { source: 'chat', id: 'guest' }
 function trigger(id: string, overrides: Partial<Trigger> = {}): Trigger {
   return { id, source: 'chat', threads: [{ source: 'chat', id: 't1' }], actor: member, human: true, at: `2026-09-23T00:00:${id.padStart(2, '0')}Z`, text: `message ${id}`, channel: { source: 'chat', thread: 't1', address: { message: id } }, meta: {}, ...overrides }
 }
 interface Hooks {
+  namespace?: string
   emit?: (event: { type: string; data: Record<string, unknown> }) => void
   prepareTicket?: EngineOptions['prepareTicket']
 }
-function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }: Hooks = {}) {
+function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket, namespace }: Hooks = {}) {
   const repo = new MemoryRepositories()
   const outbox: OutboundMessage[] = []
   const withdrawn: string[] = []
@@ -40,7 +51,7 @@ function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }:
     status: id => outbox.some(item => item.id === id) ? 'pending' : undefined,
     withdraw: id => { withdrawn.push(id) },
   }
-  const engine = new Engine({ repo, scope, policy: () => policy, assessor, executor, outbox: queued,
+  const engine = new Engine({ repo, scope, policy: () => policy, assessor, executor, outbox: queued, namespace,
     ...emit ? { emit } : {}, ...prepareTicket ? { prepareTicket } : {}, now: () => new Date(Date.UTC(2026, 8, 23, 0, 0, clock)).toISOString() })
   /** Simulate the executor starting queued assignments (unless `launch` is false) and delivering pending ticket inputs. */
   function settle({ launch = true } = {}) {

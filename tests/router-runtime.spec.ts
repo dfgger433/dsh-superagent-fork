@@ -19,7 +19,9 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
   agentCtx.reflect.provide('skills', { register: () => () => {} })
   agentCtx.reflect.provide('systemPrompt', { section: () => () => {} })
   const agent = { id: 'fresh-router', ctx: agentCtx, status: 'idle', session: { header: { agentPreset: 'dsh-superagent-router' }, snapshotEvents: () => [] }, cancel: () => {}, whenIdle: async () => {} }
-  const target = { ...agent, id: 'target-router' }
+  const targetCtx = new Context()
+  for (const key of ['tools', 'skills', 'systemPrompt']) targetCtx.reflect.provide(key, agentCtx.get(key))
+  const target = { ...agent, ctx: targetCtx, id: 'target-router' }
   const services = {
     subprocess: {}, sessionController: { resolveAgent: async (id: string) => id === target.id ? { agent: target } : { error: { code: 'session/not-found' } } }, workspaceRegistry: {}, permissionPresets: {}, tools: {}, systemPrompt: {}, skills: {}, llm: {},
     agents: { list: () => [agent], get: (id: string) => id === agent.id ? agent : undefined },
@@ -44,11 +46,27 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
     }
     const activation = await call('/superagent-status', '/superagent-status')
     expect(activation.value.error).toBeUndefined()
-    expect(activation).toMatchObject({ status: 200, value: { state: 'active', configured: true, local: true, sessionId: 'fresh-router' } })
+    expect(activation).toMatchObject({ status: 200, value: { state: 'active', instances: [{ configured: true, local: true, sessionId: 'fresh-router' }] } })
     expect(registered.has('orchestrator_chat_intake')).toBe(true)
-    expect(await call('/orchestrator/api/state', '/orchestrator')).toMatchObject({ status: 200, value: { setup: { problem: null } } })
+    expect(await call('/orchestrator/sessions/fresh-router/api/state', '/orchestrator/sessions/fresh-router')).toMatchObject({ status: 200, value: { setup: { problem: null } } })
     expect(await call('/superagent-status', '/superagent-status', { sessionId: target.id })).toMatchObject({ status: 200, value: { sessionId: target.id } })
     expect(await call('/superagent-status', '/superagent-status', { sessionId: 'missing' })).toMatchObject({ status: 409 })
+    const all = await call('/superagent-status', '/superagent-status')
+    expect(all.value.instances).toHaveLength(2)
+    const dirs = all.value.instances.map((instance: { stateDir: string }) => instance.stateDir)
+    expect(new Set(dirs).size).toBe(2)
+    for (const id of ['fresh-router', 'target-router']) {
+      const sources = await call(`/orchestrator/sessions/${id}/api/sources`, `/orchestrator/sessions/${id}`)
+      expect(sources.value).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'github', installed: true }), expect.objectContaining({ id: 'feishu', installed: true })]))
+    }
+    expect((await call('/orchestrator/sessions/fresh-router/api/state', '/orchestrator/sessions/fresh-router')).value.masterId).toBe('fresh-router')
+    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.masterId).toBe('target-router')
+    expect(await call('/orchestrator/sessions/fresh-router/api/executor/pause', '/orchestrator/sessions/fresh-router', { paused: true })).toMatchObject({ status: 200 })
+    expect((await call('/orchestrator/sessions/fresh-router/api/state', '/orchestrator/sessions/fresh-router')).value.paused).toBe(true)
+    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.paused).toBe(false)
+    await root.parallel('agent/disposed', { agent } as never)
+    expect(routes.has('/orchestrator/sessions/fresh-router')).toBe(false)
+    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).status).toBe(200)
   } finally { await plugin.dispose(); await agentCtx.fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
 })
 let h: Host | undefined

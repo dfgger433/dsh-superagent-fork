@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — Independent Superagent per conversation
+
+- Every root Superagent Session starts its own instance automatically, with a deterministic private state directory, SQLite store, settings, prompts, Sources and queues.
+- Different instances start concurrently. Pausing, restarting or releasing one does not transfer or stop another.
+- Namespace Ticket/Worker identities by Router Session, even for identical external events at identical timestamps. Resolve Worker environments through a shared lookup-only coordinator; isolate each Runtime service provider.
+- Scope management APIs by Session ID. The panel explicitly selects an instance and rebuilds its request/poll scope on switch; no mutable global selected-session transport.
+- Keep the one safe Superagent preset and exact Router tool guard. Remote Sources mount inside each instance rather than consuming one global Runtime.
+- Keep the previous single-deployment database intact. New isolated instances begin with private local defaults; old queues are not copied and replayed into every conversation.
+
 ## 0.2.3 — One Superagent preset and strict Router tools
 
 - Expose only one **Superagent** preset. Worker and child-worker capabilities are internal per-Agent compositions, mounted after Ticket ownership is verified.

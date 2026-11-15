@@ -41,6 +41,14 @@
 
 新增真实工具服务边界测试，验证继承的write/bash不可见、同scope注入pwsh仍拒绝执行、伪orchestrator前缀不能过关，只有精确获准的route工具可调用。Worker composition测试证明只目标scope可见执行工具，并覆盖async失败回滚。当前Desktop的13个Worker工具模块已通过真实import和Config校验；模型驱动的真实Worker执行未触发，完整运行链路仍以隔离测试为验证依据。
 
+## 0.3.0 每会话独立实例
+
+最终 `pnpm check`：**1,210 passed / 30 skipped**，类型检查与构建通过。多实例controller测试覆盖同ID去重、不同ID并行、单实例释放和全局关闭；真实Cordis+Runtime测试验证两个实例的Sources均独立注册、状态目录不同、暂停A不影响B、释放A后B管理API仍HTTP 200。相同外部事件同一时刻在两个Router生成不同Ticket/Worker身份。UI测试验证选择前不请求业务API、切换后使用各自编码路径，拒绝通过实例面板修改共享Host默认模板。
+
+实际运行检查发现6个已有Superagent主会话同时active/configured:true/local:true。用户指定session-f82e26e4-9541-46c0-8f45-be221f76629b与session-07314ffb-b629-4bd4-9e6a-91ed2c9748af分别使用不同sessions/<hash>目录、各自16个Router工具。实际暂停前者时后者paused=false，随后恢复前者至测试前paused=false。未向用户会话注入模拟任务，未执行真实远端写入。
+
+旧单部署数据库原地保留，不复制其配置/任务到全部新实例，避免历史任务被重复恢复。0.3.0的新实例使用私有本地默认值。共享Host配置仅作为新实例模板，已运行实例读取其创建时的机器参数快照。若用户显式让多个实例操作同一个磁盘项目，项目文件仍是用户选定的同一路径；隔离的是Superagent实例、状态、权限与任务归属。
+
 ## 边界
 
 模型和远端使用测试替身；真实远端授权/投递、飞书账号、安装后的渲染及图标尚未验证。Linux 专属脚本本次未在 Linux 主机重跑。没有将 mock 主会话集成测试称为真实模型端到端验证。

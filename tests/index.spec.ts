@@ -26,7 +26,10 @@ function context() {
     logger: { info: vi.fn(), error: vi.fn() },
     webServer: { host: '127.0.0.1', port: 1234, register: vi.fn(() => () => {}) },
   }
-  ctx.plugin = vi.fn((plugin: { apply(child: unknown): unknown }) => {
+  ctx.provide = vi.fn()
+  ctx.isolate = () => ctx
+  ctx.plugin = vi.fn((plugin: { name?: string; apply(child: unknown): unknown }) => {
+    if (plugin.name?.includes('github') || plugin.name?.includes('feishu')) return { await: async () => {}, dispose: async () => {} }
     const childCleanups: (() => Promise<void>)[] = []
     const child = { ...ctx, effect: (fn: () => () => Promise<void>) => { childCleanups.push(fn()) } }
     const result = Promise.resolve(plugin.apply(child)) as Promise<unknown> & { dispose: () => Promise<void> }

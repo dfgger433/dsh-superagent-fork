@@ -1,5 +1,5 @@
 /** Browser plugin entry point registering the sidebar icon, main management panel, and Plugin Manager config view. */
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SidebarPanelIconOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -43,19 +43,31 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
     }
   }, [ctx, t])
   const form = usePageForm(ctx.get('configForms')?.get<Record<string, unknown>>(ENTRY))
+  const [selected, setSelected] = useState('')
   const activation = usePoll(async () => {
     const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
     if (!response.ok) throw new Error(t('offline'))
-    return await response.json() as { state: string; sessionId?: string; error?: string }
+    return await response.json() as { state: string; sessionId?: string; error?: string; instances?: { sessionId: string; state: string; error?: string }[] }
   }, [t])
+  if (!activation.data && !activation.error) return <p className="dt-hint">{t('loading')}</p>
   if (activation.error || activation.data?.error || activation.data?.state === 'inactive' || activation.data?.state === 'stopped') return <section className="dt-panel">
     <h1>{t('title')}</h1>
     <p>{activation.error || activation.data?.error ? t('routerActivationFailed') : t('routerInactive')}</p>
     {(activation.data?.error || activation.error) && <p role="alert" className="dt-error">{activation.data?.error ?? activation.error?.message}</p>}
     <p className="dt-hint">{t('routerActivationHint')}</p>
   </section>
-  return <><div className="dt-hint">{t('routerActive')}</div>
-    <App t={t} openSession={openSession} deploymentForm={form} /></>
+  const instances = activation.data?.instances
+  const instance = instances?.find(item => item.sessionId === selected)
+  return <>
+    {instances && <label>{t('routerInstance')} <select aria-label={t('routerInstance')} value={instance?.sessionId ?? ''} onChange={event => setSelected(event.target.value)}>
+      <option value="">{t('routerChooseInstance')}</option>
+      {instances.map(item => <option key={item.sessionId} value={item.sessionId}>{item.sessionId}</option>)}
+    </select></label>}
+    {instances && !instance ? <p className="dt-hint">{t('routerChooseInstance')}</p>
+      : instance?.error || instance && instance.state !== 'active' ? <p className="dt-error" role="alert">{instance.error ?? t('routerInactive')}</p>
+      : <><div className="dt-hint">{t('routerActive')}</div>
+        <App key={instance?.sessionId ?? 'legacy'} sessionId={instance?.sessionId} t={t} openSession={openSession} deploymentForm={instance ? undefined : form} /></>}
+  </>
 }
 
 export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']

@@ -39,7 +39,7 @@ export function apply(ctx: Context): void {
   if (!upstream) throw new Error('The host subprocess provider is unavailable')
   ctx.provide('subprocess', scopedSubprocess(upstream, () => {
     const agent = ctx.agents.currentInitiator()
-    const owner = ctx.root.get('orchestrator') as ExecutionEnvironmentHost | undefined
+    const owner = ctx.root.get('superagentCoordinator') as ExecutionEnvironmentHost | undefined
     return agent ? owner?.environmentFor(agent.id) : undefined
   }))
 }

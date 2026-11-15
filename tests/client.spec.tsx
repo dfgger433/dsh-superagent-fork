@@ -43,7 +43,7 @@ const openMaster = async (container: HTMLElement) => {
 const serve = (status: Record<string, unknown> = { state: 'active', sessionId: 'master' }) => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
   const parsed = new URL(url, 'http://127.0.0.1')
   if (parsed.pathname === '/superagent-status') return Response.json(status)
-  const path = parsed.pathname.replace('/orchestrator/api/', '')
+  const path = parsed.pathname.replace(/^\/orchestrator\/(?:sessions\/[^/]+\/)?api\//, '')
   if (path === 'overview') return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0, filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
   if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0, executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
     setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
@@ -67,6 +67,28 @@ it('shows activation diagnostics instead of falling through to the app when Rout
   const view = await render(main, { t })
   expect(view.container.textContent).toContain(zh.routerActivationFailed)
   expect(view.container.textContent).toContain('stateDir is required')
+  view.dispose()
+})
+
+it('requires an explicit instance selection and scopes subsequent requests to that Session', async () => {
+  serve({ state: 'active', instances: [{ sessionId: 'session A', state: 'active' }, { sessionId: 'session-B', state: 'active' }] })
+  const requests = vi.mocked(fetch)
+  const { main } = fixture([])
+  const view = await render(main, { t })
+  expect(requests.mock.calls.map(([url]) => String(url))).toEqual(['/superagent-status'])
+  const choose = async (id: string) => {
+    const select = view.container.querySelector('select')!
+    await act(async () => { select.value = id; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  }
+  await choose('session A')
+  expect(requests.mock.calls.map(([url]) => String(url))).toContain('/orchestrator/sessions/session%20A/api/state')
+  requests.mockClear()
+  await choose('session-B')
+  const urls = requests.mock.calls.map(([url]) => String(url))
+  expect(urls).toContain('/orchestrator/sessions/session-B/api/state')
+  expect(urls.some(url => url.includes('/sessions/session%20A/'))).toBe(false)
+  expect(urls.some(url => url.startsWith('/orchestrator/api/'))).toBe(false)
   view.dispose()
 })
 

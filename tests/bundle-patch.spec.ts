@@ -26,7 +26,7 @@ const flat = (rows: readonly Row[]): Row[] => rows.flatMap(row => [row, ...Array
 
 it('publishes exactly one Superagent preset with no inherited shell, filesystem, delegation or other model tools', async () => {
   const rows = await patched()
-  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-router-preset'])
+  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-router-preset'])
   const presets = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset')
   expect(presets).toHaveLength(1)
   const preset = presets[0]!.config as { id: string; name: string; plugins: Row[] }

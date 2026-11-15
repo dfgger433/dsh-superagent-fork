@@ -5,6 +5,8 @@ import type { Thread, ThreadRef, Ticket, Trigger } from './model.ts'
 import type { Assessor, AssessmentOutcome, DomainEvent, DomainEvents, Executor, Outbox, Policy, Repositories, SourceScope } from './ports.ts'
 
 export interface EngineOptions {
+  /** Per-Router identity prevents identical external events from sharing Worker IDs across deployments. */
+  namespace?: string
   repo: Repositories
   policy: () => Policy
   /** Decides whether a Source listens to a trigger; one it does not listen to is stored with a `filtered` disposition. */

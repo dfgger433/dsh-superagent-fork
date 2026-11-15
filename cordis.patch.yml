@@ -2,17 +2,12 @@
 - insert:
     - id: dsh-superagent
       name: dsh-superagent
-    - id: dsh-superagent-github
-      name: dsh-superagent/github-watch
-    - id: dsh-superagent-feishu
-      name: dsh-superagent/feishu-watch
-      disabled: true
     - id: dsh-superagent-router-preset
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: dsh-superagent-router
         name: Superagent
-        description: 当前会话负责交流和路由，执行工作交给独立 Worker。支持纯本地使用，可选配置 GitHub 等远端来源。
+        description: 每个主会话都是独立 Superagent，拥有各自配置、任务和 Worker。主会话仅交流与路由；支持纯本地和可选远端来源。
         order: 10
         plugins:
           - id: time-context

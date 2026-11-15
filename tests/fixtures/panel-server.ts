@@ -99,7 +99,7 @@ export interface PanelServer {
   queued: Set<string>
   searching?: (query: string) => Promise<void>
   setup: SetupView
-  activation: { state: 'inactive' | 'active' | 'stopped'; sessionId?: string; error?: string }
+  activation: { state: 'inactive' | 'active' | 'stopped'; sessionId?: string; error?: string; instances?: { sessionId: string; state: string; error?: string }[] }
   health: Record<string, Health>
   /** When true, all API requests return an empty 404 to simulate the host plugin being stopped. */
   down: boolean
@@ -442,7 +442,7 @@ export function usePanelServer(cleanup: () => void) {
         server.requests.push({ path: 'superagent-status', method: 'GET' })
         return Response.json(server.activation)
       }
-      const path = address.pathname.replace('/orchestrator/api/', '')
+      const path = address.pathname.replace(/^\/orchestrator\/(?:sessions\/[^/]+\/)?api\//, '')
       const method = init?.method ?? 'GET'
       const body: unknown = init?.body ? JSON.parse(String(init.body)) : undefined
       server.requests.push({ path: decodeURIComponent(`${path}${address.search}`), method, ...body === undefined ? {} : { body } })

@@ -1,7 +1,8 @@
-/** Host coordinator: only a real Session selecting the Router preset mounts the deployment. */
+/** Each root Session selecting Superagent owns an isolated Runtime; there is no shared Router owner. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-settings'
+import { join } from 'node:path'
 import { Runtime } from './app/runtime.ts'
 import { RouterController } from './app/router-controller.ts'
 import { ROUTER_PRESET, LEGACY_WORKER_PRESETS } from './app/sessions.ts'
@@ -9,6 +10,9 @@ import { protectRouter } from './app/router-boundary.ts'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { sameOrigin } from './app/http.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
+import { key } from './core/ids.ts'
+import * as githubSource from './sources/github.ts'
+import * as feishuSource from './sources/feishu.ts'
 
 export const name = 'dsh-superagent'
 export const inject = ['agents', 'agentPresets', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
@@ -16,67 +20,40 @@ export { Config }
 export async function apply(ctx: Context, config: DeploymentConfig): Promise<void> {
   const machine = machineOf(config)
   ctx.inject(['settings'], child => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
-  let activeRuntime: Runtime | undefined
-  let activationError: string | undefined
-  let transferring = false
-  const blocked = new Map<Agent, (() => void)[]>()
+  const runtimes = new Map<string, Runtime>()
+  const errors = new Map<string, string>()
   const protectedRoots = new Map<Agent, () => void>()
+  const notices = new Map<Agent, () => void>()
   const protect = (agent: Agent) => {
-    if (!protectedRoots.has(agent)) protectedRoots.set(agent, protectRouter(agent, () => activeRuntime?.masterId === agent.id ? activeRuntime.routerToolNames : new Set()))
+    if (!protectedRoots.has(agent)) protectedRoots.set(agent, protectRouter(agent, () => runtimes.get(agent.id)?.routerToolNames ?? new Set()))
   }
-  const explain = (agent: Agent, reason: string) => {
-    if (blocked.has(agent)) return
-    const disposers = [agent.ctx.tools.restrict({ allow: [] }), agent.ctx.systemPrompt.section({
-      name: 'superagent-router-unavailable', order: 9999, text: `Superagent is unavailable in this Session: ${reason}. Explain this to the user. Do not execute or route work from here.`,
-    })]
-    blocked.set(agent, disposers)
-  }
+  // Only this coordinator is global: it resolves an owned Worker environment without sharing Runtime services or state.
+  ctx.provide('superagentCoordinator', { environmentFor(id: string) {
+    for (const runtime of runtimes.values()) { const env = runtime.environmentFor(id); if (env) return env }
+    return undefined
+  } })
   const controller = new RouterController<Agent>(async agent => {
+    const isolated = ctx.isolate('orchestrator')
     let runtime: Runtime | undefined
-    const restart = () => { ctx.fiber.restart().then(() => { ctx.get('settings')?.describe() }).catch(error => ctx.logger.error(String(error))) }
-    const mounted = ctx.plugin({ name: 'superagent-active-deployment', inject, apply(child: Context) {
-      runtime = activeRuntime = new Runtime(child, machine, restart, agent)
-      child.effect(() => async () => { await runtime!.stop(); if (activeRuntime === runtime) activeRuntime = undefined })
-      return runtime.ready
+    const restart = () => {
+      void controller.release(agent.id).then(() => controller.use(agent)).catch(error => { errors.set(agent.id, String(error)); ctx.logger.error(String(error)) })
+    }
+    const mounted = isolated.plugin({ name: 'superagent-session-deployment', inject, apply(child: Context) {
+      const snapshot = <T>(ref: { get(): T }) => { const value = ref.get(); return { ...ref, get: () => value } }
+      const perSession = { ...machine, stateDir: join(machine.stateDir, 'sessions', key(agent.id)),
+        promptMaxChars: snapshot(machine.promptMaxChars) as typeof machine.promptMaxChars,
+        admissionContextMaxPages: snapshot(machine.admissionContextMaxPages) as typeof machine.admissionContextMaxPages,
+        admissionContextTimeoutMs: snapshot(machine.admissionContextTimeoutMs) as typeof machine.admissionContextTimeoutMs }
+      runtime = new Runtime(child, perSession, restart, agent, true)
+      runtimes.set(agent.id, runtime)
+      child.effect(() => async () => { await runtime!.stop(); if (runtimes.get(agent.id) === runtime) runtimes.delete(agent.id) })
+      // Each Source resolves the same isolated orchestrator provider, so configuration and cursors cannot cross Sessions.
+      const github = child.plugin(githubSource), feishu = child.plugin(feishuSource)
+      return Promise.all([runtime.ready, github.await(), feishu.await()]).then(() => undefined)
     } })
-    try { await mounted.await() }
-    catch (error) { await mounted.dispose(); throw error }
+    try { await mounted.await() } catch (error) { await mounted.dispose(); throw error }
     return { stop: async () => { await mounted.dispose() } }
-  }, (agent, owner) => explain(agent, `This deployment already belongs to Router Session ${owner}; reopen it, or use a different stateDir`))
-  if (ctx.webServer.host !== '127.0.0.1') throw new Error('Superagent requires a loopback Web server')
-  ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/superagent-status', handler: async (req, res) => {
-    if (!sameOrigin(req, ctx.webServer.port)) { res.writeHead(403); res.end(); return }
-    if (req.method === 'POST') {
-      if (transferring) { res.writeHead(409); res.end(JSON.stringify({ error: 'Router transfer already in progress' })); return }
-      transferring = true
-      try {
-        let body = ''
-        for await (const chunk of req) { body += String(chunk); if (Buffer.byteLength(body) > 4096) throw new Error('Request is too large') }
-        const value = JSON.parse(body) as { sessionId?: unknown }
-        if (typeof value.sessionId !== 'string' || !value.sessionId || Object.keys(value).some(key => key !== 'sessionId')) throw new Error('Expected a Router sessionId')
-        const resolved = await ctx.sessionController.resolveAgent(value.sessionId as Agent['id'])
-        if ('error' in resolved) throw new Error('Target Session is unavailable')
-        if (!selected(resolved.agent)) throw new Error('Target must be a root Session using the Superagent preset')
-        const owner = activeRuntime
-        if (owner && owner.masterId !== resolved.agent.id) {
-          owner.transferRouter(resolved.agent.id)
-          await controller.release(owner.masterId)
-        }
-        for (const dispose of blocked.get(resolved.agent) ?? []) dispose()
-        blocked.delete(resolved.agent)
-        await activate(resolved.agent)
-        if (activationError) throw new Error(activationError)
-      } catch (error) {
-        res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: String(error) })); return
-      } finally { transferring = false }
-    } else if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
-    const targetId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('sessionId')
-    const target = targetId ? ctx.agents.get(targetId as Agent['id']) : undefined
-    const inspection = target && selected(target) ? { inspectedSessionId: target.id, routerTools: (target.ctx.tools as unknown as { definitions?: (scope: unknown) => { name: string }[]; list?: (scope: unknown) => { name: string }[] }).definitions?.(scopeOf(target.ctx)).map(tool => tool.name) ?? [] } : {}
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(JSON.stringify({ ...controller.status(), ...inspection, ...(activationError ? { error: activationError } : {}),
-      ...(activeRuntime ? { sessionId: activeRuntime.masterId, configured: activeRuntime.configured(), local: activeRuntime.configured() && !!activeRuntime.deployment.local, paused: activeRuntime.store.settings().paused } : {}) }))
-  } }))
+  })
   const selected = (agent: Agent): boolean => {
     const presets = ctx.get('agentPresets') as { presetForSession(session: Agent['session']): string | null }
     const preset = presets.presetForSession(agent.session) ?? agent.session.header.agentPreset
@@ -88,41 +65,69 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
       const presets = ctx.get('agentPresets') as { presetForSession(session: Agent['session']): string | null; recompose(ctx: Context, id: string): Promise<unknown> }
       const previous = presets.presetForSession(agent.session) ?? agent.session.header.agentPreset
       if (LEGACY_WORKER_PRESETS.includes(previous as never)) {
-        agent.cancel({ kind: 'user' }, { keepInbox: true })
-        await agent.whenIdle()
+        agent.cancel({ kind: 'user' }, { keepInbox: true }); await agent.whenIdle()
         await presets.recompose(agent.ctx, ROUTER_PRESET)
         ;(agent.session as unknown as { append(type: string, value: { agentPreset: string }): void }).append('agent-preset/selected', { agentPreset: ROUTER_PRESET })
       }
-      await controller.use(agent); activationError = undefined
+      await controller.use(agent)
+      errors.delete(agent.id); notices.get(agent)?.(); notices.delete(agent)
+    } catch (error) {
+      errors.set(agent.id, String(error)); ctx.logger.error('Superagent Session %s: %s', agent.id, String(error))
+      if (!notices.has(agent)) notices.set(agent, agent.ctx.systemPrompt.section({ name: 'superagent-unavailable', order: 10000,
+        text: `Superagent initialization failed for this Session: ${String(error)}. Explain the problem; do not execute work directly.` }))
     }
-    catch (error) { activationError = String(error); ctx.logger.error('Superagent activation failed: %s', String(error)); explain(agent, String(error)) }
   }
+  const describe = (id: string) => {
+    const runtime = runtimes.get(id)
+    return { ...controller.status(id), ...(errors.has(id) ? { error: errors.get(id) } : {}),
+      ...(runtime ? { stateDir: runtime.machine.stateDir, configured: runtime.configured(), local: runtime.configured() && !!runtime.deployment.local, paused: runtime.store.settings().paused } : {}) }
+  }
+  if (ctx.webServer.host !== '127.0.0.1') throw new Error('Superagent requires a loopback Web server')
+  ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/superagent-status', handler: async (req, res) => {
+    if (!sameOrigin(req, ctx.webServer.port)) { res.writeHead(403); res.end(); return }
+    let targetId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('sessionId')
+    if (req.method === 'POST') {
+      try {
+        let body = ''; for await (const chunk of req) { body += String(chunk); if (Buffer.byteLength(body) > 4096) throw new Error('Request is too large') }
+        const value = JSON.parse(body) as { sessionId?: unknown }
+        if (typeof value.sessionId !== 'string' || !value.sessionId || Object.keys(value).some(k => k !== 'sessionId')) throw new Error('Expected a Superagent sessionId')
+        const resolved = await ctx.sessionController.resolveAgent(value.sessionId as Agent['id'])
+        if ('error' in resolved || !selected(resolved.agent)) throw new Error('Target must be a root Session using Superagent')
+        await activate(resolved.agent); targetId = resolved.agent.id
+        if (errors.has(targetId)) throw new Error(errors.get(targetId))
+      } catch (error) { res.writeHead(409, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: String(error) })); return }
+    } else if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+    const target = targetId ? ctx.agents.get(targetId as Agent['id']) : undefined
+    const inspection = target && selected(target) ? { inspectedSessionId: target.id,
+      routerTools: (target.ctx.tools as unknown as { definitions?: (scope: unknown) => { name: string }[] }).definitions?.(scopeOf(target.ctx)).map(tool => tool.name) ?? [] } : {}
+    const result = targetId ? { ...describe(targetId), ...inspection } : {
+      state: runtimes.size ? 'active' : 'inactive', instances: [...new Set([...runtimes.keys(), ...errors.keys()])].map(describe),
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(result))
+  } }))
   ctx.on('agent/created', async ({ agent }) => { if (selected(agent)) await activate(agent) })
   ctx.on('agent-preset/selected', (id, preset) => {
     const agent = ctx.agents.get(id as Agent['id'])
     if (agent && selected(agent)) return activate(agent)
     if (agent && preset !== ROUTER_PRESET) {
-      for (const dispose of blocked.get(agent) ?? []) dispose()
-      blocked.delete(agent)
       protectedRoots.get(agent)?.(); protectedRoots.delete(agent)
+      notices.get(agent)?.(); notices.delete(agent)
       return controller.release(id)
     }
   })
   ctx.on('agent/disposed', async ({ agent }) => {
-    for (const dispose of blocked.get(agent) ?? []) dispose()
-    blocked.delete(agent)
     protectedRoots.get(agent)?.(); protectedRoots.delete(agent)
+    notices.get(agent)?.(); notices.delete(agent)
     await controller.release(agent.id)
   })
   ctx.effect(() => async () => {
     await controller.stop()
-    for (const disposers of blocked.values()) for (const dispose of disposers) dispose()
-    blocked.clear()
-    for (const dispose of protectedRoots.values()) dispose()
-    protectedRoots.clear()
+    for (const release of protectedRoots.values()) release()
+    for (const release of notices.values()) release()
+    protectedRoots.clear(); notices.clear()
   })
-  for (const agent of ctx.agents.list()) if (selected(agent)) await activate(agent)
-  ctx.logger.info('Superagent installed; select Superagent in a new Session to activate this deployment')
+  await Promise.all(ctx.agents.list().filter(selected).map(activate))
+  ctx.logger.info('Superagent ready: each selected root Session owns an independent instance')
 }
 export type { Deployment, DeploymentConfig } from './deployment.ts'
 export * from './core/index.ts'
