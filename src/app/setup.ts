@@ -19,7 +19,7 @@ const setupFields = (settings: Settings, includeEnabled: boolean) =>
 export const setupChanged = (before: Settings, after: Settings, includeEnabled = true): boolean => setupFields(before, includeEnabled) !== setupFields(after, includeEnabled)
 
 /**
- * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
+ * Resolves local or remote deployment mode, probes configured remote accounts when enabled, and writes the corresponding worker environment and command shims.
  * `Runtime` runs it at startup to gate orchestration readiness, while `Settings` uses it to validate account changes, update blocked command shims, and schedule restarts.
  */
 export class Setup {

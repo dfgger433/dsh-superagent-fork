@@ -51,7 +51,7 @@
 
 ## 0.3.2 深度扫描与隔离修复
 
-最终完整检查：**1,213 passed / 30 skipped**，64 test files passed / 1 skipped，TypeScript 与全部 6 个构建入口通过。
+最终完整检查：**1,213 passed / 30 skipped**，64 test files passed / 1 skipped，TypeScript 与全部 6 个构建入口通过。深度扫描后重新完整验证同样通过；单独的跨入口 CLI error、Router tool-shadow identity 与 lifecycle focused 回归也通过。
 
 修复了多个 Runtime 都订阅全局 Worker 事件时，外部实例的事件会在其他实例累积 personal 状态并排入无效后台任务的问题；现在先验证事件 Ticket 属于本 Runtime。故障注入测试确认 foreign Worker 状态、inbox 与 session 事件均不产生本地后台处理。
 
