@@ -440,6 +440,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/router-controller.spec.ts` | Router deployment activation, one-owner conflicts, serialized release, failed activation recovery and shutdown draining |
 | `tests/router-runtime.spec.ts` | User Router adoption, local message identity and deduplication, Worker result relay and isolated follow-up routing |
 | `tests/chat.spec.ts` | Durable Router user-message projection, rejection of relay/plugin/report content, recent chat tools, stable local Triggers and reply routing |
+| `tests/local-setup.spec.ts` | Local-only setup defaults, account-free deployment state, and the reduced remote configuration surface |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
 | `tests/runtime-concurrency.spec.ts` | Work that overlaps: Triggers during a pass, Tickets that change during deliveries and launches |
 | `tests/http.spec.ts` | The same-origin and loopback checks, the status of each kind of failure, the body limit, path parameters and queries |

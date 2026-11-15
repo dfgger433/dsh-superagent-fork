@@ -112,6 +112,17 @@ it('lists a ticket\'s execution environment in its prompt, and says setup is inc
   })
 })
 
+it('uses the local prompt and omits remote Source skills in local mode', () => {
+  withStore(store => {
+    const config = defaultPrompts()
+    const prompts = new Prompts(store, () => 100000, variables, () => true, () => true)
+    const text = prompts.compose(config, 'orchestrator')
+    expect(text).toContain('local Superagent Router')
+    expect(text).not.toContain('## CLI usage')
+    expect(prompts.skills(config).map(([name]) => name)).toEqual([])
+  })
+})
+
 it('registers the built-in Source skills, Feishu only with a Feishu bot, before the team skills', () => {
   withStore(store => {
     const config = { ...defaultPrompts(), skills: { release: 'Tag releases.' } }

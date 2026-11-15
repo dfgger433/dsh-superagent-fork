@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { UserError, key } from '../core/index.ts'
 import { policyVersion, type Settings, type SettingsOrigin } from '../policy.ts'
 import { masterPrompt, workerPrompt, sharedPrompt, guides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, cliNotes } from './context.ts'
+import { promptFile } from './skill-files.ts'
 import { environmentLines, type Variable } from './execution-environment.ts'
 import { promptsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
@@ -114,8 +115,23 @@ export function promptParts(config: PromptConfig, role: Role, environment?: stri
     ...role === 'orchestrator' && policy ? [{ name: 'runtime/policy', kind: 'generated' as const, ...policy }] : [],
   ].filter(part => part.text)
 }
-export function composePrompt(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }): string {
-  return promptParts(config, role, environment, policy).map(part => part.text).join('\n\n')
+const localRolePrompt = (role: Role): string => promptFile(role === 'orchestrator' ? 'local-orchestrator' : 'local-worker')
+/** Local mode prompt assembly: retains team sections and policy, while excluding remote Source instructions and skills. */
+export function localPromptParts(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }) {
+  const team = (name: TeamSection) => {
+    const configured = config[name]
+    const text = configured === teamDefaults[name] ? promptFile(`local-team-${name}`) : configured
+    return { name, kind: 'team' as const, heading: `## ${TEAM_HEADINGS[name]}`, text: text ? `## ${TEAM_HEADINGS[name]}\n${text}` : '' }
+  }
+  return [
+    { name: `local/${role}`, kind: 'fixed' as const, key: `local/${role}`, text: localRolePrompt(role) },
+    ...TEAM_SECTIONS.map(team),
+    ...environment ? [{ name: 'runtime/environment', kind: 'generated' as const, key: 'runtime/environment', text: environment }] : [],
+    ...role === 'orchestrator' && policy ? [{ name: 'runtime/policy', kind: 'generated' as const, ...policy }] : [],
+  ].filter(part => part.text)
+}
+export function composePrompt(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }, local = false): string {
+  return (local ? localPromptParts(config, role, environment, policy) : promptParts(config, role, environment, policy)).map(part => part.text).join('\n\n')
 }
 export function composeSkill(config: PromptConfig, name: string): string {
   return name === 'feishu' || name === 'github' ? builtIn(config, `skill/${name}`) : config.skills[name] ?? ''
@@ -135,16 +151,17 @@ export class PromptConflict extends Error {}
 export class Prompts {
   private readonly versions: Versions<PromptVersion>
   constructor(private readonly store: Store, private readonly maxChars: () => number, private readonly environment: () => Variable[] | undefined,
-    private readonly feishu: () => boolean) {
+    private readonly feishu: () => boolean, private readonly local: () => boolean = () => false) {
     this.versions = new Versions(store, KV.prompts.revision, KV.prompts.version)
   }
   /** A role's prompt; the main Session's Policy section follows the settings as they are now, at each model request. */
-  compose(config: PromptConfig, role: Role, variables = this.environment()): string {
-    return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined)
+  compose(config: PromptConfig, role: Role, variables = this.environment(), local = this.local()): string {
+    const visible = local ? variables?.filter(variable => !variable.key.includes('GITHUB') && !variable.key.includes('FEISHU')) : variables
+    return composePrompt(config, role, environmentSection(config, visible), role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined, local)
   }
-  /** Returns skills to register in every Session: built-in Source skills (`feishu` only when a Feishu bot is configured) followed by team skills. */
-  skills(config: PromptConfig): [string, string][] {
-    return [...this.feishu() ? ['feishu'] : [], 'github', ...Object.keys(config.skills)].map(name => [name, composeSkill(config, name)])
+  /** Returns skills to register in every Session; local mode carries only team skills and never remote Source skills. */
+  skills(config: PromptConfig, local = this.local()): [string, string][] {
+    return [...(local ? [] : [...(this.feishu() ? ['feishu'] : []), 'github']), ...Object.keys(config.skills)].map(name => [name, composeSkill(config, name)])
   }
   current(): PromptVersion {
     const revision = this.versions.revision()
@@ -194,10 +211,14 @@ export class Prompts {
   }
   preview(value: unknown) {
     const config = this.validate(value)
-    const environment = environmentSection(config, this.environment()), policy = policySection(this.store.settings(), config)
-    return { orchestrator: composePrompt(config, 'orchestrator', environment, policy), worker: composePrompt(config, 'worker', environment),
-      parts: { orchestrator: promptParts(config, 'orchestrator', environment, policy), worker: promptParts(config, 'worker', environment) },
-      skills: Object.fromEntries(this.skills(config)), scope: 'Team sections, skills, and overrides of built-in parts, which follow their built-in text until overridden. Workers additionally inherit the host prompt and repository AGENTS.md. Prompt text changes what the agents are told, not what dsh-superagent allows: tool permissions, the gate and account wrappers stay.' }
+    const local = this.local()
+    const variables = this.environment()
+    const visible = local ? variables?.filter(variable => !variable.key.includes('GITHUB') && !variable.key.includes('FEISHU')) : variables
+    const environment = environmentSection(config, visible), policy = policySection(this.store.settings(), config)
+    return { orchestrator: composePrompt(config, 'orchestrator', environment, policy, local), worker: composePrompt(config, 'worker', environment, undefined, local),
+      parts: { orchestrator: local ? localPromptParts(config, 'orchestrator', environment, policy) : promptParts(config, 'orchestrator', environment, policy),
+        worker: local ? localPromptParts(config, 'worker', environment) : promptParts(config, 'worker', environment) },
+      skills: Object.fromEntries(this.skills(config, local)), scope: 'Team sections, skills, and overrides of built-in parts, which follow their built-in text until overridden. Workers additionally inherit the host prompt and repository AGENTS.md. Prompt text changes what the agents are told, not what dsh-superagent allows: tool permissions, the gate and account wrappers stay.' }
   }
   save(value: unknown, baseRevision: number, source: SettingsOrigin): PromptVersion {
     const config = this.validate(value)

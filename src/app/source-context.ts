@@ -37,10 +37,11 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
     get deployment() { return deps.deployment },
     commands: deps.commands,
     ready: deps.ready,
-    configured: () => deps.configured(),
+    configured: () => deps.configured() && !(deps.deployment.local && (kind.kind === 'github' || kind.kind === 'feishu')),
     get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
     config: <C extends Record<string, unknown>>(id: string) => {
       const instance = deps.sources.instance<C>(id)
+      if (deps.configured() && deps.deployment.local && (id === 'github' || id === 'feishu')) return undefined
       return instance?.enabled ? instance.config : undefined
     },
     receive: trigger => deps.receive(trigger),

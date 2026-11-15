@@ -25,6 +25,14 @@
 
 实际运行实例 `/superagent-status` 与 `/orchestrator/api/state` 均 HTTP 200，已按用户指定绑定 session-a534baa0-2a6f-4b10-8365-38a044d3de11。当前 configured=false、repositoryUnset，需在来源中配置真实仓库/CLI；没有执行真实远端任务。详细诊断和应用记录见 [BUGFIX](BUGFIX-2026-11-15.md)。
 
+## 0.2.2 本地独立模式
+
+`pnpm check`：**1,195 passed / 30 skipped**，63 test files passed / 1 skipped，类型检查与构建成功。新增纯本地配置/环境/模式切换与本地任务集成测试，断言无 subprocess 探测、无 GitHub/飞书调用、无成员同步，本地 Worker 可完成并将报告回到 Router；远端原版回归继续通过。
+
+当前实例实测：`/superagent-status` HTTP 200，指定 session-a534baa0-2a6f-4b10-8365-38a044d3de11 返回 active/configured:true/local:true/paused:false。`/orchestrator/api/state` 返回 setup.local=true、problem=null、accounts=null，runtime=ready、maxWorkers=1。无需补填任何远端信息。实际模型执行未由测试注入用户会话，防止伪造用户任务；Worker 执行链路由隔离集成测试验证。
+
+本地默认在主会话原项目工作，独立任务严格一个槽位（包括人工跟进不会越过本地并发限制），保留用户 Git 配置。版本包为 `dsh-superagent-0.2.2.tgz`。
+
 ## 边界
 
 模型和远端使用测试替身；真实远端授权/投递、飞书账号、安装后的渲染及图标尚未验证。Linux 专属脚本本次未在 Linux 主机重跑。没有将 mock 主会话集成测试称为真实模型端到端验证。

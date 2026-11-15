@@ -57,11 +57,11 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
     : setup.feishuProblem ? setupText(t, setup.feishuProblem) : t('deploymentFeishuNone')
   return <form className="dt-form" onSubmit={event => { void draft.submit(event) }}>
     <Fields disabled={draft.busy}>
-      <Hint>{t('deploymentIntro')}</Hint>
-      {setup.problem && <div className="dt-row-buttons">
+      <Hint>{setup.local ? t('deploymentLocalMode') : t('deploymentIntro')}</Hint>
+      {setup.problem && !setup.local && <div className="dt-row-buttons">
         <p className="dt-error" role="status"><SetupMessage problem={setup.problem} lead /></p><CheckSetupButton />
       </div>}
-      {showAccounts && <Section title={t('deploymentDerived')} hint={t('deploymentDerivedHint')}>
+      {showAccounts && !setup.local && <Section title={t('deploymentDerived')} hint={t('deploymentDerivedHint')}>
         <KeyValues rows={[[t('deploymentRepository'), accounts?.repository ?? '—'],
           [t('deploymentAgent'), accounts ? `@${accounts.agent}` : '—'], [t('deploymentFeishu'), feishu]]} />
         <Hint>{t('deploymentAccountsWhere')}</Hint>

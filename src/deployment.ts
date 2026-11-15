@@ -54,10 +54,14 @@ export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
 
 export interface Deployment extends Machine {
+  /** Pure local Router, without a remote account or repository. */
+  local?: true
   repository: string
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
 }
+/** Local compatibility boundary: remote consumers must check local before using empty account fields. */
+export const localDeployment = (machine: Machine): Deployment => ({ ...machine, local: true, repository: '', github: { cli: '', login: '', noreply: '' } })
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
 
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */

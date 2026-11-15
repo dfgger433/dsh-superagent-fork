@@ -48,7 +48,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
     parse: (value, sources, id) => sources.validate(id, z.object({ enabled: z.boolean(), config: z.unknown() }).parse(value)),
     merge: (settings, value, id) => ({ ...settings, sources: { ...settings.sources, [id]: value as SettingsValue['sources'][string] } }),
     // Only the management panel may switch source accounts.
-    guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
+    guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate, false)) throw new UserError('panelOnlyAccounts') },
   },
 }
 
@@ -68,7 +68,7 @@ export interface SettingsHost {
   /** Source host passed to source kinds' policy syncs and label refreshes. */
   readonly sourceHost: SourceHost
   /** Setup state, account/command checks, and restart trigger when setup-read fields change. */
-  readonly setup: Pick<Setup, 'configured' | 'checkAccounts' | 'blockCommands' | 'restart'>
+  readonly setup: Pick<Setup, 'configured' | 'checkAccounts' | 'blockCommands' | 'restart'> & Partial<Pick<Setup, 'deployment'>>
   /** Triggers an immediate pass so work newly allowed by a settings save runs right away. */
   requestPass(): void
 }
@@ -215,7 +215,7 @@ export class Settings {
   /** Returns the IDs of installed, enabled Sources whose policy section can synchronize now (empty while setup is not configured). */
   syncable(): string[] {
     const { sources } = this.host
-    if (!this.host.setup.configured()) return []
+    if (!this.host.setup.configured() || this.host.setup.deployment?.local) return []
     return sources.instances().filter(instance => instance.installed && instance.enabled).flatMap(instance => {
       const sync = sources.kind(instance.id)?.policy?.sync
       const part = sources.policyPart(instance.id)

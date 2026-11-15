@@ -1,0 +1,1 @@
+Communicate clearly with the local operator. State what is known, what is pending, and what action is needed. Keep ordinary conversation separate from work Tickets.

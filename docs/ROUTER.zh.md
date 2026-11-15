@@ -4,7 +4,7 @@
 
 ## 安装与启用
 
-运行要求：DSH 0.2.2-rc.3 或兼容版本，Node 22.19+ / 24+，pnpm 11.7、Git、GitHub CLI；Windows 需要 PowerShell 7 (`pwsh`)。Linux 使用 `sh`。可选飞书继续需要 bot-only lark-cli。
+运行要求：DSH 0.2.2-rc.3 或兼容版本，Node 22.19+ / 24+，构建需要 pnpm 11.7；Windows 需要 PowerShell 7 (`pwsh`)，Linux 使用 `sh`。纯本地任务不需要 Git、GitHub CLI、飞书或远端账号。启用 GitHub 来源时才需要对应 CLI 和仓库权限；飞书需要 bot-only lark-cli。
 
 在本分支项目目录运行：
 
@@ -15,9 +15,17 @@ pnpm build
 
 在 DSH「插件 → 添加插件」选择项目目录，或已构建的包。`stateDir` 从 0.2.1 起默认使用当前 DSH profile 下的 `superagent` 子目录，不需要首次安装前手工填写。可在插件配置中改为专属状态目录，例如 `H:\SuperagentData\widgets`，不要与代码目录混用。已有配置继续优先使用。包保留 `dsh-superagent` 名称，升级前停用旧版本，不同时加载两份相同包或预设。
 
-新建 DSH 会话并选择 **Superagent Router**。该会话成为此部署唯一 Router；只是安装、启用插件或加载预设定义不会启动来源监听或自动创建主会话。普通预设不获得这些功能。首次使用可能等待账号配置，在 Superagent 面板的来源设置中填写 GitHub 仓库和已登录的智能体 CLI，再执行配置检查。
+新建 DSH 会话并选择 **Superagent Router**。该会话成为此部署唯一 Router；只是安装、启用插件或加载预设定义不会启动来源监听或自动创建主会话。普通预设不获得这些功能。从 0.2.2 起，不配置远端即可进入本地模式并开始执行。只有需要远端来源时，才在面板填写 GitHub 仓库和智能体 CLI；远端配置部分填写时仍会显示具体配置错误。
 
 原版的管理面板、策略、GitHub/飞书来源、模型和执行设置继续保留。GitHub 请求仍按来源名单与策略授权，本地主会话操作员单独授权；飞书默认关闭。外部事件不能冒充本地用户。
+
+## 本地独立使用
+
+选择 Superagent Router 后直接提出本地任务即可，不需要连接远端。GitHub 仓库与 CLI 全空，或显式关闭 GitHub 来源时，部署使用本地模式；GitHub/飞书轮询与成员同步均不启动，也不会探测账号或执行 Git 验证。
+
+默认 Worker 使用 Router 主会话的原项目目录，即使它不是 Git 仓库也能工作；保持本机的 Git 身份配置，不强制提交、PR 或远端审查。独立任务以一个 Worker 槽位串行执行，避免共享项目目录被并发修改。Worker 自己的子智能体能力继续保留。需要自定义准备目录时仍可配置 Execution 的 directory/prepare。
+
+本地任务使用本地角色提示词和本地交付标准；用户自定义团队提示词仍优先。完成后 Worker 记录 ready 报告，Router 在当前主会话汇总结果。
 
 ## 交互与执行
 

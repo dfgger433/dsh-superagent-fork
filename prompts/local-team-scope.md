@@ -1,0 +1,1 @@
+A Ticket covers one concrete local work request. Keep unrelated requests in separate Tickets and do not infer remote repository, account, review, or deployment requirements.

@@ -546,6 +546,7 @@ const TEXT = {
   'promptRole.worker': ['执行器 Session', 'Executor Session'],
   // Deployment
   deploymentIntro: ['这台机器上的 dsh-superagent 设置，存放在 DSH 配置文件的 dsh-superagent 条目里；保存后立即生效，不会重启 dsh-superagent。', 'dsh-superagent\'s settings on this machine, kept in the dsh-superagent entry of the DSH configuration; a saved change applies at once, without restarting dsh-superagent.'],
+  deploymentLocalMode: ['本地模式：不需要 GitHub、飞书或远端账号；Worker 在当前本地工作区执行。', 'Local mode: GitHub, Feishu and remote accounts are not required; Workers run in the current local workspace.'],
   deploymentUnavailable: ['dsh-superagent 启动完成后才能修改这些值。', 'These values can be changed once dsh-superagent has started.'],
   deploymentDerived: ['仓库与账号', 'Repository and accounts'],
   deploymentDerivedHint: ['由来源设置里的仓库和 CLI 得出。', 'Derived from the repository and the CLIs in the Source settings.'],

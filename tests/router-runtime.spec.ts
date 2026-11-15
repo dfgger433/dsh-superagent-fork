@@ -44,15 +44,42 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
     }
     const activation = await call('/superagent-status', '/superagent-status')
     expect(activation.value.error).toBeUndefined()
-    expect(activation).toMatchObject({ status: 200, value: { state: 'active', configured: false, sessionId: 'fresh-router' } })
+    expect(activation).toMatchObject({ status: 200, value: { state: 'active', configured: true, local: true, sessionId: 'fresh-router' } })
     expect(registered.has('orchestrator_chat_intake')).toBe(true)
-    expect(await call('/orchestrator/api/state', '/orchestrator')).toMatchObject({ status: 200, value: { setup: { problem: { code: 'repositoryUnset' } } } })
+    expect(await call('/orchestrator/api/state', '/orchestrator')).toMatchObject({ status: 200, value: { setup: { problem: null } } })
     expect(await call('/superagent-status', '/superagent-status', { sessionId: target.id })).toMatchObject({ status: 200, value: { sessionId: target.id } })
     expect(await call('/superagent-status', '/superagent-status', { sessionId: 'missing' })).toMatchObject({ status: 409 })
   } finally { await plugin.dispose(); await agentCtx.fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
 })
 let h: Host | undefined
 afterEach(async () => { await h?.stop(); h = undefined })
+it('executes a local-only ticket without any remote account, CLI probe, Git repository or remote call', async () => {
+  h = await startRuntime(undefined, true, true)
+  const { runtime } = h
+  expect(runtime.configured()).toBe(true)
+  expect(runtime.deployment.local).toBe(true)
+  expect(runtime.setupProblem).toBeUndefined()
+  expect(h.subprocess.spawn).not.toHaveBeenCalled()
+  expect(runtime.context({ kind: 'github', health: ['github'] }).configured()).toBe(false)
+  expect(runtime.context({ kind: 'feishu', health: ['feishu'] }).configured()).toBe(false)
+  user('offline-task', 'Implement a local change without GitHub')
+  const intake = await h.runTool(runtime.masterId, 'orchestrator_chat_intake', { message_id: 'offline-task' })
+  await runtime.idle()
+  const result = await h.route({ kind: 'accept', trigger_id: intake.trigger_id, title: 'Local change', worktree_name: 'local-change', acknowledgement: 'Working locally.' })
+  await runtime.idle()
+  const id = (result.ticket as { ticket_id: string }).ticket_id
+  const ticket = runtime.store.tickets.get(id)!
+  expect(ticket.assignments.at(-1)?.state).toBe('running')
+  expect(ticket.execution?.directory).toBe(h.directory)
+  expect(h.subprocess.spawn).not.toHaveBeenCalled()
+  expect(runtime.environmentFor(`worker-${id}`)).not.toHaveProperty('GIT_CONFIG_GLOBAL')
+  await h.runTool(`worker-${id}`, 'orchestrator_report', { state: 'ready', summary: 'Local task completed.' })
+  await runtime.idle()
+  expect(h.deliveries.mock.calls.some(([call]) => call.sessionId === runtime.masterId && call.text.includes('Local task completed.'))).toBe(true)
+  expect(runtime.commands.gh).not.toHaveBeenCalled()
+  expect(runtime.commands.lark).not.toHaveBeenCalled()
+  expect(runtime.commands.run).not.toHaveBeenCalled()
+})
 function user(id: string, text: string) {
   h!.ctx.emit('session/event', { id: h!.runtime.masterId } as never, { type: 'user/message', time: Date.now(), data: {
     id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }],

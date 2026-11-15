@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 — Standalone local execution
+
+- Router Sessions work without GitHub, Feishu, Git or remote accounts. Empty GitHub configuration or an explicitly disabled GitHub Source selects local mode.
+- Local Workers use the Router project directory by default, including non-Git projects, and retain local Git configuration. Independent tasks run in one slot to avoid shared-directory edit races.
+- Local mode performs no account probes, remote polling or member synchronization. Source command wrappers refuse remote CLIs, while remote deployments retain their existing account isolation and admission rules.
+- Add local role/team defaults and local completion reports; default prompts require no PR or remote review. User-authored team text remains in force.
+- Preserve incomplete remote-configuration errors and allow explicit remote configuration to switch back to connected operation.
+
 ## 0.2.1 — Fresh installation activation fix
 
 - Fix Host startup failure when the bundle is installed without `stateDir`: default to `<DSH_PROFILE_DIR>/superagent`, or the equivalent profile path under DSH_HOME. Installation remains idle until a Router is used.

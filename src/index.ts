@@ -66,7 +66,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     } else if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     res.end(JSON.stringify({ ...controller.status(), ...(activationError ? { error: activationError } : {}),
-      ...(activeRuntime ? { sessionId: activeRuntime.masterId, configured: activeRuntime.configured(), paused: activeRuntime.store.settings().paused } : {}) }))
+      ...(activeRuntime ? { sessionId: activeRuntime.masterId, configured: activeRuntime.configured(), local: activeRuntime.configured() && !!activeRuntime.deployment.local, paused: activeRuntime.store.settings().paused } : {}) }))
   } }))
   const selected = (agent: Agent): boolean => {
     const presets = ctx.get('agentPresets') as { presetForSession(session: Agent['session']): string | null }

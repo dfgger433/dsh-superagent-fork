@@ -1,0 +1,1 @@
+Deliver local work through the Worker Session report and the Router's local reply. Verify changes with appropriate local tests. A result is complete when the local acceptance criteria are met; no pull request or remote review is required.

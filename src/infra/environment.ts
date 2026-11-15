@@ -81,14 +81,16 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
  * Atomically writes worker CLI shims and the isolated git configuration file into the state directory, refusing to overwrite foreign files.
  * Each shim strips the shim directory from PATH before exec so wrapper scripts resolving `gh` or `lark-cli` by name reach the real binary.
  */
-export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
-  const { stateDir, repository, github, feishu } = deployment
+export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu' | 'local'>, blockedCommands: readonly string[]): Promise<void> {
+  const { stateDir, local, github, feishu } = deployment
   const dir = workerBin(stateDir)
   await mkdir(dir, { recursive: true })
   const before = await readdir(dir)
   for (const name of before) { const file = join(dir, name); if (!await written(file)) throw new SetupError('foreignFile', { file }) }
   // Workers may be running concurrently: write each shim to a temp file and atomically rename it so no command ever resolves past the shim directory.
   const kept = new Set<string>()
+  const unavailable = (name: string) => `${name} is unavailable in local mode; configure and enable a remote Source first.`
+  const blocked = (name: string) => local ? `${name} is blocked in this installation.` : `${name} is blocked in this installation; use gh, which acts as ${github.login}.`
   const windowsRun = (program: string): string => `$env:PATH = (($env:PATH -split ';' | Where-Object { $_.TrimEnd('\\','/') -ine ${psLiteral(dir)} }) -join ';')\n& ${psLiteral(program)} @args\n$ok = $?\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }; if (-not $ok) { exit 1 }`
 
   const shim = async (name: string, body: string): Promise<void> => {
@@ -97,8 +99,8 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     await rename(temporary, join(dir, name))
     kept.add(name)
     if (process.platform === 'win32') {
-      const ps = name === 'gh' ? windowsRun(github.cli) : name === 'lark-cli' && feishu ? windowsRun(feishu.cli)
-        : `Write-Error ${psLiteral(name === 'lark-cli' ? 'lark-cli is unavailable: this installation has no Feishu bot.' : `${name} is blocked in this installation; use gh, which acts as ${github.login}.`)}; exit 1`
+      const ps = !local && name === 'gh' ? windowsRun(github.cli) : !local && name === 'lark-cli' && feishu ? windowsRun(feishu.cli)
+        : `Write-Error ${psLiteral(local && WORKER_COMMANDS.includes(name) ? unavailable(name) : name === 'lark-cli' ? 'lark-cli is unavailable: this installation has no Feishu bot.' : blocked(name))}; exit 1`
       await own(join(dir, `${name}.ps1`), `${MARKER}\n${ps}\n`)
       await own(join(dir, `${name}.cmd`), `@rem ${MARKER}\r\n@echo off\r\npwsh -NoLogo -NoProfile -NonInteractive -File "%~dp0${name}.ps1" %*\r\n`)
       kept.add(`${name}.ps1`); kept.add(`${name}.cmd`)
@@ -111,12 +113,17 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   ].join('\n')
   const run = (program: string): string => `${withoutShims}\nexec ${shellQuote(program)} "$@"`
   const fail = (message: string): string => `echo ${shellQuote(message)} >&2\nexit 1`
-  await shim('gh', run(github.cli))
-  await shim('lark-cli', feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
+  await shim('gh', local ? fail(unavailable('gh')) : run(github.cli))
+  await shim('lark-cli', local ? fail(unavailable('lark-cli')) : feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
-    await shim(name, fail(`${name} is blocked in this installation; use gh, which acts as ${github.login}.`))
+    await shim(name, fail(blocked(name)))
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
+  if (local) {
+    // Keep the managed artifact harmless when switching from remote; local children never select it.
+    await own(workerGitConfig(stateDir), `${MARKER}\n`)
+    return
+  }
   await own(workerGitConfig(stateDir), [
     MARKER,
     // Make git refuse to commit without an explicit identity set by the worker instead of guessing from the operator's OS user.
@@ -129,9 +136,12 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   ].join('\n') + '\n')
 }
 
-/** A fresh worker environment; never modifies the host process. */
-export function workerEnvironment(stateDir: string, path = process.env.PATH ?? ''): Record<string, string | undefined> {
-  return { ...agentVariables(stateDir), PATH: [workerBin(stateDir), withoutDirectory(path, workerBin(stateDir))].join(delimiter) }
+/** Local work retains normal git configuration and identity. Only remote CLI credentials are removed. */
+export function localVariables(): Record<string, string | undefined> { return { GH_TOKEN: undefined, GITHUB_TOKEN: undefined } }
+
+/** A fresh worker environment; never modifies the host process. Pass local=true to retain user git settings. */
+export function workerEnvironment(stateDir: string, path = process.env.PATH ?? '', local = false): Record<string, string | undefined> {
+  return { ...(local ? localVariables() : agentVariables(stateDir)), PATH: [workerBin(stateDir), withoutDirectory(path, workerBin(stateDir))].join(delimiter) }
 }
 
 /** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables. */
