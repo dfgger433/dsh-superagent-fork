@@ -33,6 +33,14 @@
 
 本地默认在主会话原项目工作，独立任务严格一个槽位（包括人工跟进不会越过本地并发限制），保留用户 Git 配置。版本包为 `dsh-superagent-0.2.2.tgz`。
 
+## 0.2.3 Router 工具隔离
+
+最终 `pnpm check`：**1,202 passed / 30 skipped**，64 test files passed / 1 skipped，类型检查和构建通过。独立入口打包没有跨入口私有别名导入，CLI Error 品牌跨入口保持 304/410 等状态判定。
+
+用户提供的 session-fab27bb7-d946-451b-bb8e-d155764af450 原先选中 dsh-superagent-worker，因此可写文件。已移除两个额外 Worker 预设，唯一可选预设名为 Superagent；真正 Worker 动态挂载工具。给指定会话迁移预设记录并转交空部署，运行态检查 /superagent-status?sessionId=... 返回16个明确的 orchestrator 工具，无 read/write/edit/bash/pwsh/job/subagent。Plugin Manager 运行态仅有一条 Superagent preset row。
+
+新增真实工具服务边界测试，验证继承的write/bash不可见、同scope注入pwsh仍拒绝执行、伪orchestrator前缀不能过关，只有精确获准的route工具可调用。Worker composition测试证明只目标scope可见执行工具，并覆盖async失败回滚。当前Desktop的13个Worker工具模块已通过真实import和Config校验；模型驱动的真实Worker执行未触发，完整运行链路仍以隔离测试为验证依据。
+
 ## 边界
 
 模型和远端使用测试替身；真实远端授权/投递、飞书账号、安装后的渲染及图标尚未验证。Linux 专属脚本本次未在 Linux 主机重跑。没有将 mock 主会话集成测试称为真实模型端到端验证。

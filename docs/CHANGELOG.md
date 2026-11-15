@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 — One Superagent preset and strict Router tools
+
+- Expose only one **Superagent** preset. Worker and child-worker capabilities are internal per-Agent compositions, mounted after Ticket ownership is verified.
+- Remove all filesystem, Shell, jobs and delegation tools from the public preset. Every root Router hides inherited tools and uses an exact dispatch allowlist, including protection against write/command tools registered locally by other plugins.
+- Migrate live root conversations mistakenly created under the old Worker preset to the safe Superagent composition; real Worker sessions remain Ticket-bound.
+- Remove Router execution-environment access. A Router can read Ticket resources and route requests, but cannot edit project files or run implementation commands.
+- Build Host entries independently to prevent cached private-export mismatches during plugin reload; preserve CLI error branding across independently evaluated entries.
+
 ## 0.2.2 — Standalone local execution
 
 - Router Sessions work without GitHub, Feishu, Git or remote accounts. Empty GitHub configuration or an explicitly disabled GitHub Source selects local mode.

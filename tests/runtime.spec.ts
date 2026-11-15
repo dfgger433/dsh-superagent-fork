@@ -36,6 +36,8 @@ import { preview, readable } from '../src/app/views/text.ts'
 import { decisionList, search, threadDetail, threadList } from '../src/app/views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from '../src/app/views/tickets.ts'
 
+vi.mock('../src/worker-composition.ts', () => ({ mountWorker: async () => async () => {} }))
+
 const shimNames = (names: string[]) => names.flatMap(name => process.platform === 'win32' ? [name, `${name}.cmd`, `${name}.ps1`] : [name]).sort()
 let runtime: Runtime
 const viewsOf = (value: Runtime) => ({ store: value.store, sources: value.sources, links: value.links() })
@@ -1494,76 +1496,45 @@ it('fails a ticket at once on a worker error that is not passing, and relays it'
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'worker_report', ticket: { ticket_id: ticket.id }, state: 'failed' })
 })
 
-it('refuses the main Session a bash command that runs sleep and a long job wait, as reports arrive by themselves, and no worker', async () => {
-  const bash = (command: string) => ({ name: 'bash', arguments: { command, description: 'x' } })
+it('refuses every root Router shell or job call and permits only exact orchestration tools', async () => {
   const main = guards.get(runtime.masterId)!
-  for (const command of ['sleep 60; echo done', 'cd x && sleep 5', 'gh pr checks 7 || sleep 30', 'echo a\nsleep 90', 'while true; do sleep 30; done',
-    '(sleep 5)', '/bin/sleep 240', 'while sleep 30; do gh pr checks 7; done', 'if sleep 5; then gh pr view 7; fi', '{ sleep 60; }', '! sleep 5',
-    'nohup sleep 60', 'exec sleep 60', 'time sleep 60', 'until sleep 1; do :; done', 'command sleep 5', 'env sleep 5'])
-    expect(main(bash(command)), command).toMatch(/^Reports, follow_up notices, new candidates and a background job's end/)
-  // A command that names sleep as data, not at a command position, runs.
-  for (const command of ['gh api repos/acme/widgets/pulls', 'echo "sleep"', 'grep sleep file', 'sleeper --help', 'command -v sleep'])
-    expect(main(bash(command)), command).toBeUndefined()
-  // A command that asks to hold the step longer than 30 seconds, however it waits, under any preset.
-  const timed = (command: string, args: { timeoutMs?: number; run_in_background?: boolean } = {}) =>
-    ({ name: 'bash', arguments: { command, description: 'x', ...args } })
-  expect(main(timed('gh api repos/acme/widgets/pulls', { timeoutMs: 120_000 }))).toMatch(/^Reports/)
-  expect(main(timed("python3 -c 'import time;time.sleep(240)'", { timeoutMs: 600_000 }))).toMatch(/^Reports/)
-  expect(main(timed('gh api repos/acme/widgets/pulls', { timeoutMs: 20_000 }))).toBeUndefined()
-  // Under the router preset, the shell moves a command without a timeout to a background job after 5 seconds, and a job
-  // wait without one ends after 5 seconds too; a longer job wait waits for nothing that arrives that way.
-  expect(main(timed('gh pr checks 7 --watch'))).toBeUndefined()
-  expect(main({ name: 'job_output', arguments: { job_id: 'j', wait: true } })).toBeUndefined()
-  expect(main({ name: 'job_output', arguments: { job_id: 'j', wait: true, timeout_ms: 30_000 } })).toMatch(/^Reports/)
-  expect(main({ name: 'job_output', arguments: { job_id: 'j', wait: true, timeout_ms: 5_000 } })).toBeUndefined()
-  expect(main({ name: 'job_output', arguments: { job_id: 'j' } })).toBeUndefined()
-  // A main Session created before runs under standard, whose shell waits 60 seconds by default and whose job waits last 30:
-  // a command without a timeout runs in the background or names one, and a job wait names one.
-  ;(agents.get(runtime.masterId) as unknown as { session: { header: { agentPreset: string } } }).session.header = { agentPreset: 'standard' }
-  expect(main(timed('gh pr checks 7 --watch'))).toMatch(/^This shell waits up to 60 seconds by default: pass timeoutMs of at most 30000/)
-  expect(main(timed('gh pr checks 7 --watch', { run_in_background: true }))).toBeUndefined()
-  expect(main(timed('gh api repos/acme/widgets/pulls', { timeoutMs: 20_000 }))).toBeUndefined()
-  expect(main({ name: 'job_output', arguments: { job_id: 'j', wait: true } })).toMatch(/^Reports/)
-  expect(main({ name: 'job_output', arguments: { job_id: 'j', wait: true, timeout_ms: 5_000 } })).toBeUndefined()
-  // A worker waits for its own work as it needs.
-  const { sessionId } = await acceptedTicket()
-  expect(guards.get(sessionId)!(bash('sleep 60'))).toBeUndefined()
-  // The main Session's role says so.
-  expect(masterPrompt).toContain('Reports, follow_up notices, candidates and job results arrive automatically.')
+  for (const name of ['bash', 'pwsh', 'job_output', 'write', 'edit', 'orchestrator_fake']) {
+    for (const args of [{}, { command: 'echo safe', timeoutMs: 5000 }, { wait: false }, { run_in_background: true }]) {
+      expect(main({ name, arguments: args })).toMatch(/^The Router may only use/)
+    }
+  }
+  expect(main({ name: 'orchestrator_route', arguments: { decisions: [] } })).toBeUndefined()
+  const { ticket, sessionId } = await acceptedTicket()
+  expect(main({ name: 'orchestrator_read', arguments: { resource: `ticket/${ticket.id}` } })).toBeUndefined()
+  expect(await runTool(runtime.masterId, 'orchestrator_read', { resource: `ticket/${ticket.id}` })).toMatchObject({ ticket_id: ticket.id })
+  expect(guards.get(sessionId)!({ name: 'bash', arguments: { command: 'sleep 60' } })).toBeUndefined()
 })
 
-it('reads the main Session\'s preset from a registry with or without presetForSession, and takes standard\'s caps when it cannot', async () => {
+it('keeps the root Router boundary when preset lookup is absent, standard, or throws', async () => {
   const watch = { name: 'bash', arguments: { command: 'gh pr checks 7 --watch', description: 'x' } }
   const route = { name: 'orchestrator_route', arguments: { decisions: [] } }
-  const guard = async (registry: Record<string, unknown>, projections?: Record<string, unknown>) => {
+  const registries = [
+    { select: vi.fn() },
+    { select: vi.fn(), presetForSession: () => 'standard' },
+    { select: vi.fn(), presetForSession: () => { throw new Error('no projection') } },
+  ]
+  for (const registry of registries) {
     services.agentPresets = registry
-    if (projections) services.sessionProjections = projections; else delete services.sessionProjections
+    services.sessionProjections = { stateOf: vi.fn(() => 'standard') }
     await (await restart()).ready
-    return guards.get(runtime.masterId)!
+    const main = guards.get(runtime.masterId)!
+    expect(main(route)).toBeUndefined()
+    expect(main(watch)).toMatch(/^The Router may only use/)
+    expect(main({ name: 'pwsh', arguments: { command: 'echo safe' } })).toMatch(/^The Router may only use/)
+    expect(main({ name: 'job_output', arguments: { job_id: 'j', wait: false } })).toMatch(/^The Router may only use/)
   }
-  // A released DSH's registry has no presetForSession: the projection says standard, so standard's caps apply, and the
-  // other tools run.
-  let main = await guard({ select: vi.fn() }, { stateOf: vi.fn((_session: unknown, key: string) => key === 'agentPreset' ? 'standard' : undefined) })
-  expect(main(route)).toBeUndefined()
-  expect(main(watch)).toMatch(/^This shell waits up to 60 seconds by default/)
-  // Without the projection either, the preset it was created with counts: the router preset.
-  main = await guard({ select: vi.fn() })
-  expect([main(route), main(watch)]).toEqual([undefined, undefined])
-  // The registry says standard though the Session was created with the router preset: standard's caps apply.
-  main = await guard({ select: vi.fn(), presetForSession: () => 'standard' })
-  expect(main(watch)).toMatch(/^This shell waits up to 60 seconds by default/)
-  // A registry that fails is read as standard, the safer caps, and the guard does not throw.
-  main = await guard({ select: vi.fn(), presetForSession: () => { throw new Error('no projection') } })
-  expect(main(route)).toBeUndefined()
-  expect(main(watch)).toMatch(/^This shell waits up to 60 seconds by default/)
 })
-
 it('refuses an ended ticket\'s worker its tools, and restricts the main Session to the tools it may use', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   expect(guards.get(sessionId)!()).toBeUndefined()
   runtime.engine.stopTicket(ticket.id)
   expect(guards.get(sessionId)!()).toBe('Ticket ended; new work needs a new authorized ticket')
-  expect(restricts.get(runtime.masterId)).toEqual([{ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }])
+  expect(restricts.get(runtime.masterId)).toEqual([{ allow: [] }])
   // A worker keeps only the profile's work tools: none that ask a person, change the profile, schedule or start work outside
   // the worker slots, reach other Sessions or edit documents, whenever they were registered.
   expect(restricts.get(sessionId)).toEqual([{ allow: ['read', 'read_image', 'grep', 'bash', 'job_output', 'job_list', 'job_kill', 'web_search', 'skill'] }])
@@ -1678,7 +1649,7 @@ it('restarts a worker whose shell job the host stop ended with the recovery note
 it('creates an Executor Session under the bundle\'s worker preset, and the main Session under its router preset', async () => {
   const { sessionId } = await acceptedTicket()
   const created = controller.create.mock.calls.map(([options]) => options as { sessionId: string; agentPreset: string })
-  expect(created.find(options => options.sessionId === sessionId)).toMatchObject({ agentPreset: 'dsh-superagent-worker' })
+  expect(created.find(options => options.sessionId === sessionId)).toMatchObject({ agentPreset: 'dsh-superagent-router' })
   expect(created.find(options => options.sessionId === runtime.masterId)).toMatchObject({ agentPreset: 'dsh-superagent-router' })
 })
 
@@ -1701,7 +1672,7 @@ it('selects its own preset again for a main Session or worker a person switched 
   emit(runtime.masterId, 'dsh-superagent-router'); await Promise.resolve()
   expect(presets.select).not.toHaveBeenCalled()
   emit(sessionId, 'standard')
-  await vi.waitFor(() => expect(presets.select).toHaveBeenCalledWith(agents.get(sessionId), 'dsh-superagent-worker'))
+  await vi.waitFor(() => expect(presets.select).toHaveBeenCalledWith(agents.get(sessionId), 'dsh-superagent-router'))
   // Another Session is not one of dsh-superagent's.
   presets.select.mockClear()
   emit('someone-else', 'standard'); emit('worker-nothing', 'standard'); await Promise.resolve()

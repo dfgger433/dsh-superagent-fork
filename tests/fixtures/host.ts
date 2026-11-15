@@ -20,6 +20,7 @@ import { credentialHelper, workerGitConfig } from '../../src/infra/environment.t
 import type { Trigger } from '../../src/core/index.ts'
 import { testMachine } from './deployment.ts'
 
+vi.mock('../../src/worker-composition.ts', () => ({ mountWorker: async () => async () => {} }))
 export const MEMBER = 'ou_alice'
 export const CHAT = 'oc_team'
 

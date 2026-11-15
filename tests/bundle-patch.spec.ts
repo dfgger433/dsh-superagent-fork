@@ -1,12 +1,15 @@
-/** The bundle's patch, read with the entry-list dialect DSH reads bundle patches with, and the agent preset it defines. */
+/** The public preset is tool-free; Engine-owned workers receive a separate Agent-scoped composition. */
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
+import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { expect, it } from 'vitest'
-import { ROUTER_PRESET, WORKER_PRESET } from '../src/app/sessions.ts'
+import ToolsService from '@deepseek-ai/dsh-tools'
+import { ROUTER_PRESET } from '../src/app/sessions.ts'
+import { mountWorker, workerModules, SUPERAGENT_PRESET, type WorkerModuleLoader } from '../src/worker-composition.ts'
 
-interface Row { id?: string; name: string; disabled?: unknown; config?: Record<string, unknown> & { plugins?: Row[] } | Row[] }
-/** The patch as DSH reads it: Cordis's include plugin parses `!!js` scalars, and applies the inserts to an entry list. */
+interface Row { id?: string; name: string; config?: Record<string, unknown> & { plugins?: Row[] } | Row[] }
 async function patched(): Promise<Row[]> {
   const cordis = createRequire(createRequire(import.meta.url).resolve('@deepseek-ai/cordis/package.json'))
   const include = cordis.resolve('@deepseek-ai/cordis-plugin-include')
@@ -19,55 +22,108 @@ async function patched(): Promise<Row[]> {
   expect(warnings).toEqual([])
   return rows
 }
-/** Every plugin row of a preset, those inside groups too. */
 const flat = (rows: readonly Row[]): Row[] => rows.flatMap(row => [row, ...Array.isArray(row.config) ? flat(row.config) : []])
 
-/** A preset the patch defines, by its id. */
-const presetOf = (rows: readonly Row[], id: string) => rows.map(row => row.config as { id?: string; order?: number; plugins: Row[] })
-  .find(config => config?.id === id)!
-
-it('defines the worker preset Executor Sessions run under, with a shell that moves long commands to the background', async () => {
+it('publishes exactly one Superagent preset with no inherited shell, filesystem, delegation or other model tools', async () => {
   const rows = await patched()
-  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-worker-preset',
-    'dsh-superagent-worker-child-preset', 'dsh-superagent-router-preset'])
-  const preset = presetOf(rows, WORKER_PRESET)
-  expect(preset.id).toBe(WORKER_PRESET)
-  const plugins = flat(preset.plugins)
-  const named = (name: string) => plugins.filter(row => row.name === name).map(row => row.config)
-  expect(named('@deepseek-ai/dsh-bash-sandbox')).toEqual([{ timeoutMs: 5000, maxTimeoutMs: 5000 }])
-  expect(named('@deepseek-ai/dsh-pwsh-sandbox')).toEqual([{ timeoutMs: 5000, maxTimeoutMs: 5000 }])
-  expect(named('@deepseek-ai/dsh-tool-jobs')).toEqual([{ waitTimeoutMs: 5000, maxWaitTimeoutMs: 5000 }])
-  expect(named('@deepseek-ai/dsh-tool-web')).toEqual([expect.objectContaining({ fetch: false })])
-  // Spawned subagents run under standard, whose shell moves a command to the background only after 60 s; forked ones, which would run under
-  // this preset, are left out.
-  expect(named('@deepseek-ai/dsh-tool-subagent')).toEqual([expect.objectContaining({ provider: 'spawn', agentPreset: 'dsh-superagent-worker-child' })])
-  // What a worker needs, and none of what asks a person, presents, plans, changes the profile, schedules, sets goals or runs workflows.
-  for (const name of ['@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-skill',
-    '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-subagent-control', '@deepseek-ai/dsh-compaction-basic',
-    '@deepseek-ai/dsh-compaction-tool-result-pruner', '@deepseek-ai/dsh-agent-instructions']) expect(named(name).length).toBeGreaterThan(0)
-  const names = plugins.map(row => row.name)
-  for (const name of ['@deepseek-ai/dsh-tool-ask-user', '@deepseek-ai/dsh-tool-present', '@deepseek-ai/dsh-plan-mode', '@deepseek-ai/dsh-plugin-manager/tools',
-    '@deepseek-ai/dsh-plugin-market/tools', '@deepseek-ai/dsh-tool-schedule', '@deepseek-ai/dsh-tool-goal', '@deepseek-ai/dsh-command-goal',
-    '@deepseek-ai/dsh-tool-workflow', '@deepseek-ai/dsh-workflow-ptc']) expect(names).not.toContain(name)
+  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-router-preset'])
+  const presets = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset')
+  expect(presets).toHaveLength(1)
+  const preset = presets[0]!.config as { id: string; name: string; plugins: Row[] }
+  expect(preset.id).toBe(ROUTER_PRESET)
+  expect(preset.id).toBe(SUPERAGENT_PRESET)
+  expect(preset.name).toBe('Superagent')
+  expect(flat(preset.plugins).map(row => row.name)).toEqual([
+    '@deepseek-ai/dsh-time-context', 'cordis:group', '@deepseek-ai/dsh-compaction-basic', '@deepseek-ai/dsh-command-compact', '@deepseek-ai/dsh-compaction-tool-result-pruner',
+  ])
 })
-
-it('defines the router preset the main Session runs under: the worker\'s 5-second shell and job waits, and only the tools it uses', async () => {
-  const rows = await patched()
-  const router = presetOf(rows, ROUTER_PRESET), worker = presetOf(rows, WORKER_PRESET)
-  expect(router.order).toBe(10)
-  const plugins = flat(router.plugins)
-  const named = (preset: Row[], name: string) => preset.filter(row => row.name === name).map(row => row.config)
-  for (const name of ['@deepseek-ai/dsh-bash-sandbox', '@deepseek-ai/dsh-pwsh-sandbox', '@deepseek-ai/dsh-tool-jobs']) {
-    expect(named(plugins, name), name).toEqual(named(flat(worker.plugins), name))
+it('keeps execution tools in the internal composition with native shell, bounded waits and the same public preset ID for children', () => {
+  for (const platform of ['linux', 'win32'] as const) {
+    const modules = workerModules(platform)
+    expect(modules.find(row => /-sandbox$/.test(row.name))).toEqual({ name: platform === 'win32' ? '@deepseek-ai/dsh-pwsh-sandbox' : '@deepseek-ai/dsh-bash-sandbox', realm: 'shell', config: { timeoutMs: 5000, maxTimeoutMs: 5000 } })
+    expect(modules.find(row => row.name === '@deepseek-ai/dsh-tool-subagent')?.config).toMatchObject({ provider: 'spawn', agentPreset: SUPERAGENT_PRESET })
+    for (const name of ['@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-skill']) expect(modules.some(row => row.name === name)).toBe(true)
   }
-  // The tools its allow list keeps: skill, bash, read, read_image and the job tools; the file tools only read.
-  for (const name of ['@deepseek-ai/dsh-tool-skill', '@deepseek-ai/dsh-skill-filesystem', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-jobs',
-    '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-time-context', '@deepseek-ai/dsh-compaction-basic',
-    '@deepseek-ai/dsh-compaction-tool-result-pruner']) expect(named(plugins, name).length, name).toBeGreaterThan(0)
-  expect(named(plugins, '@deepseek-ai/dsh-tool-fs')).toEqual([{ write: false, edit: false }])
-  const names = plugins.map(row => row.name)
-  for (const name of ['@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-subagent-control', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-tool-fs-search',
-    '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-ask-user', '@deepseek-ai/dsh-tool-present', '@deepseek-ai/dsh-plan-mode',
-    '@deepseek-ai/dsh-plugin-manager/tools', '@deepseek-ai/dsh-plugin-market/tools', '@deepseek-ai/dsh-tool-schedule', '@deepseek-ai/dsh-tool-goal',
-    '@deepseek-ai/dsh-command-goal', '@deepseek-ai/dsh-tool-workflow', '@deepseek-ai/dsh-workflow-ptc']) expect(names, name).not.toContain(name)
+})
+it('mounts worker modules only in the requested Agent scope and shares one private subprocess realm with all shell consumers', async () => {
+  const root = new Context(), worker = {}, other = {}
+  const scope = createScope(root, worker), ordinary = createScope(root, other)
+  const upstream = { spawn: () => {} }
+  root.provide('subprocess', upstream as never)
+  root.provide('agents', { currentInitiator: () => undefined } as never)
+  const active = new Set<string>(), observed: unknown[] = []
+  const load: WorkerModuleLoader = async name => ({ apply(ctx: Context) {
+    expect(scopeOf(ctx)).toBe(worker)
+    ctx.effect(() => { active.add(name); return () => { active.delete(name) } })
+    if (/pwsh|bash/.test(name)) observed.push(ctx.get('subprocess'))
+  } })
+  const dispose = await mountWorker({ ctx: scope.ctx }, load)
+  expect(active.size).toBe(workerModules().length)
+  expect(observed).toHaveLength(2)
+  expect(observed[0]).toBe(observed[1])
+  expect(observed[0]).not.toBe(upstream)
+  expect(root.get('subprocess')).toBe(upstream)
+  expect(ordinary.ctx.get('subprocess')).toBe(upstream)
+  await dispose()
+  expect(active.size).toBe(0)
+  await scope.dispose(); await ordinary.dispose()
+})
+it('awaits asynchronous plugin activation and rolls back a rejected activation', async () => {
+  const root = new Context(), scope = createScope(root, {})
+  root.provide('subprocess', {} as never)
+  root.provide('agents', {} as never)
+  const active = new Set<string>()
+  const load: WorkerModuleLoader = async name => ({ async apply(ctx: Context) {
+    await Promise.resolve()
+    if (name === '@deepseek-ai/dsh-tool-fs') throw new Error('fixture asynchronous activation failure')
+    ctx.effect(() => { active.add(name); return () => { active.delete(name) } })
+  } })
+  await expect(mountWorker({ ctx: scope.ctx }, load)).rejects.toThrow('fixture asynchronous activation failure')
+  expect(active.size).toBe(0)
+  await scope.dispose()
+})
+it('registers execution tools through the real ToolsService only for the mounted worker and removes them on disposal', async () => {
+  const root = new Context(), worker = {}, ordinary = {}
+  root.provide('systemPrompt', { tools: () => {} } as never)
+  const tools = new ToolsService(root)
+  root.provide('subprocess', {} as never)
+  root.provide('agents', {} as never)
+  const scope = createScope(root, worker)
+  const load: WorkerModuleLoader = async name => ({ inject: ['tools'], apply(ctx: Context) {
+    if (name !== '@deepseek-ai/dsh-tool-fs') return
+    ctx.tools.register({ name: 'write', description: 'fixture scoped write', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: () => '' }, execute: async () => '' } as unknown as Parameters<ToolsService['register']>[0])
+  } })
+  expect(tools.get('write', worker)).toBeUndefined()
+  const dispose = await mountWorker({ ctx: scope.ctx }, load)
+  expect(tools.get('write', worker)?.name).toBe('write')
+  expect(tools.get('write', ordinary)).toBeUndefined()
+  expect(tools.get('write')).toBeUndefined()
+  await dispose()
+  expect(tools.get('write', worker)).toBeUndefined()
+  await scope.dispose()
+})
+it('rejects missing required services and rolls back before a worker can be prompted', async () => {
+  const root = new Context(), scope = createScope(root, {})
+  root.provide('subprocess', {} as never)
+  root.provide('agents', {} as never)
+  const active = new Set<string>()
+  const load: WorkerModuleLoader = async name => name === '@deepseek-ai/dsh-tool-fs'
+    ? { inject: ['fixtureMissingWorkerService'], apply() {} }
+    : { apply(ctx: Context) { ctx.effect(() => { active.add(name); return () => { active.delete(name) } }) } }
+  await expect(mountWorker({ ctx: scope.ctx }, load)).rejects.toThrow('Worker composition is missing services: fixtureMissingWorkerService')
+  expect(active.size).toBe(0)
+  await scope.dispose()
+})
+it('rolls back every loaded worker module if any import fails', async () => {
+  const root = new Context(), scope = createScope(root, {})
+  root.provide('subprocess', {} as never)
+  root.provide('agents', {} as never)
+  const active = new Set<string>()
+  const load: WorkerModuleLoader = async name => {
+    if (name === '@deepseek-ai/dsh-tool-fs') throw new Error('fixture import failure')
+    return { apply(ctx: Context) { ctx.effect(() => { active.add(name); return () => { active.delete(name) } }) } }
+  }
+  await expect(mountWorker({ ctx: scope.ctx }, load)).rejects.toThrow('fixture import failure')
+  expect(active.size).toBe(0)
+  await scope.dispose()
 })

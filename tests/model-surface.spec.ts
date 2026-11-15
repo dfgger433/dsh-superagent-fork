@@ -24,6 +24,7 @@ import { feishuKind, feishuTrigger } from '../src/sources/feishu.ts'
 import { githubKind } from '../src/sources/github.ts'
 import { testMachine } from './fixtures/deployment.ts'
 
+vi.mock('../src/worker-composition.ts', () => ({ mountWorker: async () => async () => {} }))
 type Role = 'orchestrator' | 'worker'
 interface Surface { where: string; owner: string; role: Role | 'both'; text: string }
 interface Tool {

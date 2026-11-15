@@ -7,7 +7,7 @@ import { HEALTH_TEXT } from '../sources/host.ts'
 
 const TEXT = {
   // Shared
-  routerInactive: ['尚未启用：请在新会话中选择 Superagent Router 预设。', 'Inactive: select the Superagent Router preset in a new Session.'],
+  routerInactive: ['尚未启用：请在新会话中选择 Superagent 预设。', 'Inactive: select the Superagent preset in a new Session.'],
   routerActivationFailed: ['Router 未能启动。请检查插件配置，尤其是状态目录。', 'Router could not start. Check the plugin configuration, especially the state directory.'],
   routerActivationHint: ['请在 DSH 的插件配置中修正 stateDir 等配置后重试；选择预设只会绑定当前主会话。', 'Fix stateDir and other settings in the DSH Plugin configuration, then retry; selecting the preset binds the current main Session.'],
   routerActive: ['Router 已绑定主会话；配置与运行状态见下方。', 'Router bound to the main Session; setup and execution status appear below.'],

@@ -322,6 +322,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/core/memory.ts` | `MemoryRepositories`: the Store's repositories in memory, in the Store's order and with its nested rollback, for domain tests |
 | `src/core/index.ts` | The core's exports |
 | `src/app/runtime.ts` | The Runtime, the composition root, with its start and stop |
+| `src/worker-composition.ts` | Internal per-Agent worker tool composition; no worker preset in the user roster |
+| `src/app/router-boundary.ts` | Exact Router tool guard and inherited capability mask |
 | `src/app/router-controller.ts` | `RouterController`, which serializes preset-owned deployment activation, one active mount, conflicts, release and shutdown |
 | `src/app/chat.ts` | `ChatMessages`, the durable Router-user message projection, recent-ID listing, and the `orchestrator_chat_messages` and `orchestrator_chat_intake` tools |
 | `src/app/setup.ts` | Setup, and `setupChanged`, whether a save changes a field setup reads |
@@ -437,6 +439,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
+| `tests/router-boundary.spec.ts` | Real tool-registry dispatch refuses local and inherited write/shell tools and accepts only exact Router tools |
 | `tests/router-controller.spec.ts` | Router deployment activation, one-owner conflicts, serialized release, failed activation recovery and shutdown draining |
 | `tests/router-runtime.spec.ts` | User Router adoption, local message identity and deduplication, Worker result relay and isolated follow-up routing |
 | `tests/chat.spec.ts` | Durable Router user-message projection, rejection of relay/plugin/report content, recent chat tools, stable local Triggers and reply routing |

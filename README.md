@@ -8,9 +8,9 @@ dsh-superagent is a proactive coding agent for one GitHub repository, packaged a
 
 It is also a way of working with an agent: **take as little human attention as possible, and give as much value as possible.** An agent that can act for a whole team can also waste a whole team's attention, so it acts only when asked or when a rule the team wrote allows it, and speaks only when someone must act or can use a result. [docs/000-philosophy.md](docs/000-philosophy.md) explains the principle and what it asks of the operator.
 
-## Router preset fork (0.2.2)
+## Superagent preset fork (0.2.3)
 
-This branch makes the selected **Superagent Router** conversation the deployment's main Session. Installation stays idle until a root Session actually uses that preset. The Router communicates and routes local requests and GitHub candidates; independent Workers investigate and implement. One state directory binds one Router, and ordinary presets keep their own execution environment. With no remote configured, local mode works directly in the Router project without Git, GitHub CLI or Feishu accounts; Workers report local completion without requiring PRs or remote reviews.
+This branch makes the selected **Superagent** conversation the deployment's main Session. Installation stays idle until a root Session actually uses that preset. The Router communicates and routes local requests and GitHub candidates; independent Workers investigate and implement. One state directory binds one Router, and ordinary presets keep their own execution environment. With no remote configured, local mode works directly in the Router project without Git, GitHub CLI or Feishu accounts; Workers report local completion without requiring PRs or remote reviews.
 
 Windows Desktop (PowerShell 7) and Linux execution are supported. Read [Router installation and migration / 中文使用说明](docs/ROUTER.zh.md) first; it replaces the prototype's dedicated-profile and automatic-main-session setup for this branch. Original Policy, Tickets, Sources, panel, queues and worker recovery remain available. See [Changelog](docs/CHANGELOG.md) for the behavior changes and [local verification](docs/local/VERIFICATION.md) for tested limits.
 

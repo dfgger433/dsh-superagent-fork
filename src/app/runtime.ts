@@ -230,7 +230,7 @@ export class Runtime extends Service implements SourceHost {
   /** Environment for the bound Router, owned Workers and their descendants; never for unrelated Sessions. */
   environmentFor(sessionId: string): Record<string, string | undefined> | undefined {
     if (this.closing() || !this.configured()) return undefined
-    if (sessionId === this.masterId) return this.setup.workerEnvironment
+    if (sessionId === this.masterId) return undefined
     let id: string | undefined = sessionId
     for (let depth = 0; id && depth < 32; depth++) {
       const ticketId = id.startsWith('worker-') ? id.slice('worker-'.length) : undefined
@@ -250,6 +250,7 @@ export class Runtime extends Service implements SourceHost {
       this.store.set(KV.runtime.masterId, sessionId)
     })
   }
+  get routerToolNames(): ReadonlySet<string> { return this.sessions.allowedRouterTools }
   checkSetup(): void { this.setup.check() }
   private quietlyAttach(ticketId: string, triggerId: string): void {
     this.quiet++
@@ -309,7 +310,7 @@ export class Runtime extends Service implements SourceHost {
       // The workers' jobs and subagents stop too: their ends would start worker turns without the tool limits released below.
       await this.executor.shutdown()
       this.executor.dispose()
-      this.sessions.dispose()
+      await this.sessions.dispose()
       for (const dispose of this.disposers.reverse()) dispose()
       await this.ctx.sessionPersistence.flush()
     } finally {

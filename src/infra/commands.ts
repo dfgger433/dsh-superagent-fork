@@ -13,7 +13,14 @@ const TIMEOUT_MS = 90_000
  * Source channels and pollers inspect its code to distinguish deleted conversations from retryable failures.
  */
 export class CliError extends Error {
-  constructor(message: string, readonly code?: number, readonly exitCode?: number) { super(message) }
+  constructor(message: string, readonly code?: number, readonly exitCode?: number) {
+    super(message)
+    Object.defineProperty(this, Symbol.for('dsh-superagent.CliError'), { value: true })
+  }
+  /** Public bundle entries may be evaluated separately by HMR; keep the error contract across entry copies. */
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return !!value && typeof value === 'object' && (value as Record<symbol, unknown>)[Symbol.for('dsh-superagent.CliError')] === true
+  }
 }
 /** Extracts a sanitized error from a failed subprocess without echoing argv, which may contain message text. */
 export function commandError(error: unknown, program = 'command'): Error {

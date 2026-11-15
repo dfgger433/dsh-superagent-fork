@@ -9,6 +9,14 @@ import { SourceRegistry } from '../src/sources/registry.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { key, type OutboundMessage } from '../src/core/index.ts'
 import { testDeployment } from './fixtures/deployment.ts'
+it('preserves CLI error identity across independently evaluated bundle entries', async () => {
+  const separateEntry = '../src/infra/commands.ts?separate-entry'
+  const { CliError: OtherCliError } = await import(separateEntry)
+  const error = new OtherCliError('Gone', 410, 1)
+  expect(error).toBeInstanceOf(CliError)
+  expect(new CliError('Rate limited', 429)).toBeInstanceOf(OtherCliError)
+  expect(new Error('not a CLI error')).not.toBeInstanceOf(CliError)
+})
 const sources = new SourceRegistry(() => SettingsSchema.parse({}))
 sources.register(feishuKind); sources.register(githubKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)

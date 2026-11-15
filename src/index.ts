@@ -4,7 +4,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-settings'
 import { Runtime } from './app/runtime.ts'
 import { RouterController } from './app/router-controller.ts'
-import { ROUTER_PRESET } from './app/sessions.ts'
+import { ROUTER_PRESET, LEGACY_WORKER_PRESETS } from './app/sessions.ts'
+import { protectRouter } from './app/router-boundary.ts'
+import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { sameOrigin } from './app/http.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 
@@ -18,6 +20,10 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   let activationError: string | undefined
   let transferring = false
   const blocked = new Map<Agent, (() => void)[]>()
+  const protectedRoots = new Map<Agent, () => void>()
+  const protect = (agent: Agent) => {
+    if (!protectedRoots.has(agent)) protectedRoots.set(agent, protectRouter(agent, () => activeRuntime?.masterId === agent.id ? activeRuntime.routerToolNames : new Set()))
+  }
   const explain = (agent: Agent, reason: string) => {
     if (blocked.has(agent)) return
     const disposers = [agent.ctx.tools.restrict({ allow: [] }), agent.ctx.systemPrompt.section({
@@ -50,7 +56,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
         if (typeof value.sessionId !== 'string' || !value.sessionId || Object.keys(value).some(key => key !== 'sessionId')) throw new Error('Expected a Router sessionId')
         const resolved = await ctx.sessionController.resolveAgent(value.sessionId as Agent['id'])
         if ('error' in resolved) throw new Error('Target Session is unavailable')
-        if (!selected(resolved.agent)) throw new Error('Target must be a root Session using the Superagent Router preset')
+        if (!selected(resolved.agent)) throw new Error('Target must be a root Session using the Superagent preset')
         const owner = activeRuntime
         if (owner && owner.masterId !== resolved.agent.id) {
           owner.transferRouter(resolved.agent.id)
@@ -64,40 +70,59 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
         res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: String(error) })); return
       } finally { transferring = false }
     } else if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+    const targetId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('sessionId')
+    const target = targetId ? ctx.agents.get(targetId as Agent['id']) : undefined
+    const inspection = target && selected(target) ? { inspectedSessionId: target.id, routerTools: (target.ctx.tools as unknown as { definitions?: (scope: unknown) => { name: string }[]; list?: (scope: unknown) => { name: string }[] }).definitions?.(scopeOf(target.ctx)).map(tool => tool.name) ?? [] } : {}
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(JSON.stringify({ ...controller.status(), ...(activationError ? { error: activationError } : {}),
+    res.end(JSON.stringify({ ...controller.status(), ...inspection, ...(activationError ? { error: activationError } : {}),
       ...(activeRuntime ? { sessionId: activeRuntime.masterId, configured: activeRuntime.configured(), local: activeRuntime.configured() && !!activeRuntime.deployment.local, paused: activeRuntime.store.settings().paused } : {}) }))
   } }))
   const selected = (agent: Agent): boolean => {
     const presets = ctx.get('agentPresets') as { presetForSession(session: Agent['session']): string | null }
-    return !agent.session.header.parentSession && (presets.presetForSession(agent.session) ?? agent.session.header.agentPreset) === ROUTER_PRESET
+    const preset = presets.presetForSession(agent.session) ?? agent.session.header.agentPreset
+    return !agent.session.header.parentSession && !agent.id.startsWith('worker-') && (preset === ROUTER_PRESET || LEGACY_WORKER_PRESETS.includes(preset as never))
   }
   const activate = async (agent: Agent) => {
-    try { await controller.use(agent); activationError = undefined }
+    protect(agent)
+    try {
+      const presets = ctx.get('agentPresets') as { presetForSession(session: Agent['session']): string | null; recompose(ctx: Context, id: string): Promise<unknown> }
+      const previous = presets.presetForSession(agent.session) ?? agent.session.header.agentPreset
+      if (LEGACY_WORKER_PRESETS.includes(previous as never)) {
+        agent.cancel({ kind: 'user' }, { keepInbox: true })
+        await agent.whenIdle()
+        await presets.recompose(agent.ctx, ROUTER_PRESET)
+        ;(agent.session as unknown as { append(type: string, value: { agentPreset: string }): void }).append('agent-preset/selected', { agentPreset: ROUTER_PRESET })
+      }
+      await controller.use(agent); activationError = undefined
+    }
     catch (error) { activationError = String(error); ctx.logger.error('Superagent activation failed: %s', String(error)); explain(agent, String(error)) }
   }
   ctx.on('agent/created', async ({ agent }) => { if (selected(agent)) await activate(agent) })
   ctx.on('agent-preset/selected', (id, preset) => {
     const agent = ctx.agents.get(id as Agent['id'])
-    if (agent && !agent.session.header.parentSession && preset === ROUTER_PRESET) return activate(agent)
+    if (agent && selected(agent)) return activate(agent)
     if (agent && preset !== ROUTER_PRESET) {
       for (const dispose of blocked.get(agent) ?? []) dispose()
       blocked.delete(agent)
+      protectedRoots.get(agent)?.(); protectedRoots.delete(agent)
       return controller.release(id)
     }
   })
   ctx.on('agent/disposed', async ({ agent }) => {
     for (const dispose of blocked.get(agent) ?? []) dispose()
     blocked.delete(agent)
+    protectedRoots.get(agent)?.(); protectedRoots.delete(agent)
     await controller.release(agent.id)
   })
   ctx.effect(() => async () => {
     await controller.stop()
     for (const disposers of blocked.values()) for (const dispose of disposers) dispose()
     blocked.clear()
+    for (const dispose of protectedRoots.values()) dispose()
+    protectedRoots.clear()
   })
   for (const agent of ctx.agents.list()) if (selected(agent)) await activate(agent)
-  ctx.logger.info('Superagent installed; select Superagent Router in a new Session to activate this deployment')
+  ctx.logger.info('Superagent installed; select Superagent in a new Session to activate this deployment')
 }
 export type { Deployment, DeploymentConfig } from './deployment.ts'
 export * from './core/index.ts'

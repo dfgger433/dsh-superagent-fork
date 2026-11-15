@@ -19,6 +19,8 @@ import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
 import type { Store } from './store.ts'
 import { KV } from '../kv.ts'
 import type { RegisterTool, Tool } from './tools/tool.ts'
+import { mountWorker } from '../worker-composition.ts'
+import { protectRouter } from './router-boundary.ts'
 
 /** Host dependencies used by `Sessions`. */
 export interface SessionsHost {
@@ -46,7 +48,8 @@ export interface SessionsHost {
 interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: { revision: number; dispose: () => void }; subagent?: true }
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
-export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
+export const ROUTER_PRESET = 'dsh-superagent-router', WORKER_PRESET = ROUTER_PRESET
+export const LEGACY_WORKER_PRESETS = ['dsh-superagent-worker', 'dsh-superagent-worker-child'] as const
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /** DSH's agent preset registry selected `agentPreset` for a Session. */
@@ -92,6 +95,7 @@ function noWait({ name, arguments: input }: { name: string; arguments: unknown }
  * Feeds session events into `RetryHealth` to report model budget waits on the `models` `HealthEntry`, and durably records which prompt revisions each session has worked under in `Store` (`KV.sessions.prompts`) to authorize prompt version reads.
  */
 export class Sessions {
+  readonly allowedRouterTools = new Set<string>()
   private readonly agentDelivery: AgentDelivery
   /** Decorated agents mapped to their registered disposers and skill scope until the agent is disposed or `Sessions.dispose()` runs. */
   private readonly bindings = new Map<Agent, SessionBinding>()
@@ -137,7 +141,7 @@ export class Sessions {
   }
   /** Decorates the user's chosen Router in place, keeping its title, workspace, model and permissions. */
   async adopt(agent: Agent): Promise<void> {
-    if (agent.id !== this.host.masterId || !this.routed(agent)) throw new Error('Router must use the Superagent Router preset')
+    if (agent.id !== this.host.masterId || !this.routed(agent)) throw new Error('Router must use the Superagent preset')
     await this.decorate(agent)
   }
   /** Resolves or creates session `id` in workspace `cwd`, initializes its role model, decorates it with prompts/skills/tools, sets `danger-full-access` permissions, and renames it to `title`. */
@@ -235,12 +239,20 @@ export class Sessions {
     const ticketId = ticketOfSession(agent.id)
     return ticketId === undefined ? undefined : this.host.store.tickets.get(ticketId)
   }
-  private async decorate(agent: Agent): Promise<void> {
+  private readonly decorating = new Map<Agent, Promise<void>>()
+  private decorate(agent: Agent): Promise<void> {
+    const existing = this.decorating.get(agent)
+    if (existing) return existing
+    const pending = this.decorateOnce(agent).finally(() => { this.decorating.delete(agent) })
+    this.decorating.set(agent, pending)
+    return pending
+  }
+  private async decorateOnce(agent: Agent): Promise<void> {
     if (this.bindings.has(agent)) return
     const host = this.host
     const master = agent.id === host.masterId
     const ticket = master ? undefined : this.ticketOf(agent)
-    if (!master && !ticket) { this.limitSubagent(agent); return }
+    if (!master && !ticket) { await this.limitSubagent(agent); return }
     const binding: SessionBinding = { disposers: [] }
     this.bindings.set(agent, binding)
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
@@ -263,14 +275,18 @@ export class Sessions {
     await skillScope.await()
     // Bail out if the agent was disposed while awaiting the skill scope.
     if (this.bindings.get(agent) !== binding) return
+    if (!master) {
+      const release = await mountWorker(agent)
+      binding.disposers.push(release)
+    }
     const register = this.registerTool(agent, binding)
-    for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
+    const tools = host.tools(agent, ticket)
+    if (master) for (const tool of tools) this.allowedRouterTools.add(tool.name)
+    for (const tool of tools) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
-      binding.disposers.push(agent.ctx.tools.restrict({ allow: ['skill', 'bash', 'pwsh', 'read', 'read_image', 'job_output', 'job_list', 'job_kill']
-          .filter(name => agent.ctx.tools.get(name, scopeParentOf(agent))) }),
-        agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
+      const allowed = new Set(tools.map(tool => tool.name))
+      binding.disposers.push(protectRouter(agent, () => allowed))
     } else {
-      // An Executor Session keeps the profile's work tools it has, which DSH requires to be known; its own tools are not masked.
       binding.disposers.push(...this.workOnly(agent, ticket!.id))
     }
   }
@@ -284,7 +300,7 @@ export class Sessions {
       const projections = this.ctx.get('sessionProjections') as { stateOf?: (session: Agent['session'], key: string) => unknown } | undefined
       const selected = typeof presets?.presetForSession === 'function' ? presets.presetForSession(agent.session)
         : projections?.stateOf?.(agent.session, 'agentPreset')
-      return (selected ?? agent.session.header.agentPreset) === ROUTER_PRESET
+      return [ROUTER_PRESET, ...LEGACY_WORKER_PRESETS].includes((selected ?? agent.session.header.agentPreset) as string)
     } catch { return false }
   }
   /**
@@ -307,7 +323,7 @@ export class Sessions {
    * permissions, gets the same work tools as the worker, and none once the worker's ticket ended. Any other agent is left as
    * it is.
    */
-  private limitSubagent(agent: Agent): void {
+  private async limitSubagent(agent: Agent): Promise<void> {
     let parent = agent.session.header.parentSession
     // Up the subagents' parents to the worker, which are loaded while their subagents run.
     for (let depth = 0; parent !== undefined && ticketOfSession(parent) === undefined && depth < 8; depth++) {
@@ -315,7 +331,8 @@ export class Sessions {
     }
     const ticketId = parent === undefined ? undefined : ticketOfSession(parent)
     if (ticketId === undefined || !this.host.store.tickets.get(ticketId)) return
-    this.bindings.set(agent, { disposers: this.workOnly(agent, ticketId), subagent: true })
+    const release = await mountWorker(agent)
+    this.bindings.set(agent, { disposers: [release, ...this.workOnly(agent, ticketId)], subagent: true })
   }
   /** Register the skills of a prompt version in the agent's skill scope, in place of an earlier version's. */
   private bindSkills(binding: SessionBinding, version: PromptVersion): void {
@@ -345,15 +362,20 @@ export class Sessions {
     return version
   }
   /** Releases registrations for `agent` in reverse order (LIFO); disposing its skill scope releases its skills as well. */
+  private readonly releasing: Promise<unknown>[] = []
   private release(agent: Agent): void {
     const binding = this.bindings.get(agent)
     if (!binding) return
     this.bindings.delete(agent)
     binding.skills?.dispose()
     for (const dispose of binding.disposers.splice(0).reverse()) {
-      try { dispose() } catch (error) { this.ctx.logger.warn('dsh-superagent could not release what it registered for a Session: %s', String(error)) }
+      try { const result: unknown = dispose(); if (result instanceof Promise) this.releasing.push(result) } catch (error) { this.ctx.logger.warn('dsh-superagent could not release what it registered for a Session: %s', String(error)) }
     }
   }
   /** Releases prompt sections, skills, and tools registered by `Sessions` across all decorated agents. */
-  dispose(): void { for (const agent of [...this.bindings.keys()]) this.release(agent) }
+  async dispose(): Promise<void> {
+    await Promise.allSettled(this.decorating.values())
+    for (const agent of [...this.bindings.keys()]) this.release(agent)
+    await Promise.allSettled(this.releasing.splice(0))
+  }
 }

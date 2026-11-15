@@ -15,7 +15,7 @@ function context() {
   const handlers = new Map<string, (...args: any[]) => unknown>()
   const cleanups: (() => unknown)[] = []
   const configure = vi.fn(() => () => {})
-  const agent = { id: 'user-session', session: { header: { agentPreset: 'dsh-superagent-router' } }, ctx: { tools: { restrict: vi.fn(() => () => {}) }, systemPrompt: { section: vi.fn(() => () => {}) } } }
+  const agent = { id: 'user-session', session: { header: { agentPreset: 'dsh-superagent-router' } }, ctx: { tools: { restrict: vi.fn(() => () => {}), guard: vi.fn(() => () => {}) }, systemPrompt: { section: vi.fn(() => () => {}) } } }
   const ctx: any = {
     on: vi.fn((name: string, handler: (...args: any[]) => unknown) => { handlers.set(name, handler) }),
     inject: vi.fn((_services: string[], callback: (child: unknown) => void) => callback({ effect: (effect: () => unknown) => effect(), settings: { configure } })),

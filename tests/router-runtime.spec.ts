@@ -112,7 +112,7 @@ it('adopts the user Session, routes one durable local request once and returns w
   await runtime.idle()
   expect(h.deliveries.mock.calls.some(([call]) => call.sessionId === 'user-router' && call.text.includes('Regression fixed'))).toBe(true)
   expect(runtime.environmentFor('unrelated')).toBeUndefined()
-  expect(runtime.environmentFor('user-router')).toBeDefined()
+  expect(runtime.environmentFor('user-router')).toBeUndefined()
 })
 it('rejects plugin relays as local requests and attaches follow-ups only to their chosen ticket', async () => {
   h = await startRuntime(undefined, true)
