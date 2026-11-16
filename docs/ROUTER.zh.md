@@ -15,7 +15,7 @@ pnpm build
 
 在 DSH「插件 → 添加插件」选择项目目录，或已构建的包。`stateDir` 从 0.2.1 起默认使用当前 DSH profile 下的 `superagent` 子目录，不需要首次安装前手工填写。可在插件配置中改为专属状态目录，例如 `H:\SuperagentData\widgets`，不要与代码目录混用。已有配置继续优先使用。包保留 `dsh-superagent` 名称，升级前停用旧版本，不同时加载两份相同包或预设。
 
-新建 DSH 会话并选择 **Superagent**。每个主会话都会自动创建独立的 Superagent Runtime；本地任务与聊天始终留在该会话。主页 Superagent 面板只管理 profile 级共享设置（来源、策略、模型、执行默认值和团队提示词），不列出、不切换也不管理本地会话。要管理单个会话，请在 DSH 会话列表的该会话菜单选择“管理此会话的 Superagent”；打开的是当前会话专属的 Ticket/执行视图。安装、启用插件或加载预设定义不会启动来源监听或自动创建主会话。普通预设不获得这些功能。从 0.4.0 起，来源配置与策略等设置在各实例间共享；Ticket、聊天、来源游标、队列和执行状态仍按会话隔离。若多个实例监听同一个 GitHub 仓库，它们会分别收到事件并可能独立创建工单；需要避免重复远端处理时，只在一个实例开启该来源。
+新建 DSH 会话并选择 **Superagent**。每个主会话都会自动创建独立的 Superagent Runtime；本地任务与聊天始终留在该会话。主页 Superagent 面板只管理 profile 级共享设置（来源、策略、模型、执行默认值和团队提示词），不列出、不切换也不管理本地会话。要管理单个会话，请在会话窗口的视图标签栏选择 **Superagent**（与“对话”“轨迹”等并列）；打开的是当前会话专属的 Ticket/执行视图。安装、启用插件或加载预设定义不会启动来源监听或自动创建主会话。普通预设不获得这些功能。从 0.4.0 起，来源配置与策略等设置在各实例间共享；Ticket、聊天、来源游标、队列和执行状态仍按会话隔离。若多个实例监听同一个 GitHub 仓库，它们会分别收到事件并可能独立创建工单；需要避免重复远端处理时，只在一个实例开启该来源。
 
 Superagent 主页面板集中管理共享策略、GitHub/飞书来源、模型、执行默认值和提示词。GitHub 请求仍按来源名单与策略授权，本地会话操作员单独授权；飞书默认关闭。外部事件不能冒充本地用户。
 
@@ -23,7 +23,7 @@ Superagent 主页面板集中管理共享策略、GitHub/飞书来源、模型�
 
 插件只提供一个用户可选预设 **Superagent**。Router 会话仅拥有已注册的路由、消息和任务状态工具，没有 read/write/edit、bash/pwsh、后台作业或任意子智能体工具；Host 的精确工具 guard 还会拒绝其他插件在当前 Agent 上新增的命令/写入工具。Ticket 执行器继续使用独立 Worker Session，并只在 Engine 确认 Ticket 归属后动态加载文件、Shell、作业和子代理工具。
 
-旧版本中误选“执行器”预设的已加载主会话会迁移为安全 Router。打开任意 Superagent 会话，在会话行菜单选择“管理此会话的 Superagent”，即可进入该会话专属的 Ticket、线程、执行和报告视图；主页 Superagent 面板不管理本地会话。
+旧版本中误选“执行器”预设的已加载主会话会迁移为安全 Router。打开任意 Superagent 会话，在会话窗口的视图标签栏选择“Superagent”，即可进入该会话专属的 Ticket、线程、执行和报告视图；主页 Superagent 面板不管理本地会话。
 
 ## 本地独立使用
 
@@ -39,7 +39,7 @@ Superagent 主页面板集中管理共享策略、GitHub/飞书来源、模型�
 
 Router 负责交流、评估、路由与结果解释，Worker 负责调查、计划和实现。暂停、停止、重试、持久队列及失败恢复仍由 Ticket Engine 管理。每个 Router 的 Ticket、队列、提示词版本绑定、来源游标和执行状态相互隔离。
 
-`stateDir` 是 profile 级数据根目录；全局设置库位于 `global-config/settings.sqlite`，每个 Superagent 会话的 Ticket 数据仍在 `sessions/<会话ID哈希>` 下独立保存。主页 Superagent 面板提供共享配置与提示词管理；会话菜单中的 Superagent 入口使用 `/orchestrator/sessions/<会话ID>/api/` 管理当前会话，不影响其他会话。
+`stateDir` 是 profile 级数据根目录；全局设置库位于 `global-config/settings.sqlite`，每个 Superagent 会话的 Ticket 数据仍在 `sessions/<会话ID哈希>` 下独立保存。主页 Superagent 面板提供共享配置与提示词管理；会话窗口中的 **Superagent** 视图使用 `/orchestrator/sessions/<会话ID>/api/` 管理当前会话，不影响其他会话。
 
 ## Windows 与工作目录
 

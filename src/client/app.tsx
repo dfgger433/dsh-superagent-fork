@@ -100,7 +100,7 @@ function SearchResults({ result, query, onClose }: { result: SearchView; query: 
   </div>
 }
 
-function Header({ masterId }: { masterId: string | undefined }) {
+function Header({ masterId, sessionOnly = false }: { masterId: string | undefined; sessionOnly?: boolean }) {
   const { t, call, openSession, notify } = usePanel()
   const [glossary, setGlossary] = useState(false)
   const [query, setQuery] = useState('')
@@ -133,14 +133,14 @@ function Header({ masterId }: { masterId: string | undefined }) {
       </form>
       <Button variant="ghost" size="sm" icon={<Icon name="question" />} aria-label={t('glossary')} title={t('glossary')} aria-haspopup="dialog"
         onClick={() => setGlossary(true)} />
-      <Button variant="outline" size="sm" icon={<Icon name="session" size={14} />} disabled={!masterId}
-        onClick={() => { if (masterId) openSession(masterId).catch(failure => notify(errorText(failure))) }}>{t('openMaster')}</Button>
+      {!sessionOnly && <Button variant="outline" size="sm" icon={<Icon name="session" size={14} />} disabled={!masterId}
+        onClick={() => { if (masterId) openSession(masterId).catch(failure => notify(errorText(failure))) }}>{t('openMaster')}</Button>}
     </div>
     <Glossary open={glossary} onClose={() => setGlossary(false)} />
   </header>
 }
 
-function Pages({ route, openTab, deploymentForm, tabs }: { route: Route; openTab: (tab: Tab) => void; deploymentForm: DeploymentForm; tabs: readonly Tab[] }) {
+function Pages({ route, openTab, deploymentForm, tabs, sessionOnly }: { route: Route; openTab: (tab: Tab) => void; deploymentForm: DeploymentForm; tabs: readonly Tab[]; sessionOnly: boolean }) {
   const { t } = usePanel()
   const { state, error, reload } = usePanelData()
   // Keep the active tab scrolled into view on narrow screens when routes change via links.
@@ -162,7 +162,7 @@ function Pages({ route, openTab, deploymentForm, tabs }: { route: Route; openTab
   })()
   return <div className="dt-page">
     <div className="dt-column">
-      <Header masterId={state?.masterId} />
+      <Header masterId={state?.masterId} sessionOnly={sessionOnly} />
       {error && state && <p className="dt-error" role="status">{error.message}</p>}
       <SegmentedTabs className="dt-tabs" label={t('pagesLabel')} value={route.page} onChange={openTab}
         items={tabs.map(value => ({ value, label: t(`tab.${value}`), id: `dt-tab-${value}`, panelId: 'dt-page' }))} />
@@ -174,11 +174,12 @@ function Pages({ route, openTab, deploymentForm, tabs }: { route: Route; openTab
 /** Root panel component managing route history and shared panel state. */
 export function App({ t, openSession, deploymentForm, sessionId, sessionOnly = false }: AppProps) {
   const tabs = sessionOnly ? TABS.filter(tab => tab !== 'settings') : TABS
+  const routeStorageKey = sessionOnly && sessionId ? `dsh-superagent/session/${sessionId}/route` : undefined
   const [location, setLocation] = useState(() => {
-    const initial = initialLocation()
+    const initial = initialLocation(routeStorageKey)
     return sessionOnly && initial.route.page === 'settings' ? { route: HOME, stack: [] } : initial
   })
-  useEffect(() => { remember(location) }, [location])
+  useEffect(() => { remember(location, routeStorageKey) }, [location, routeStorageKey])
   // Preserve the last opened settings group across navigation so the Settings tab reopens at it.
   const move = useCallback((next: (current: Location) => Pick<Location, 'route' | 'stack'>) =>
     setLocation(current => ({ ...next(current), group: lastSettingsGroup(current) })), [])
@@ -189,7 +190,7 @@ export function App({ t, openSession, deploymentForm, sessionId, sessionOnly = f
   const openTab = useCallback((tab: Tab) => move(current => ({ stack: [], route: tab === 'settings'
     ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })), [move])
   return <PanelProvider key={sessionId ?? 'legacy'} t={t} sessionId={sessionId} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>
-    <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} tabs={tabs} />
+    <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} tabs={tabs} sessionOnly={sessionOnly} />
   </PanelProvider>
 }
 

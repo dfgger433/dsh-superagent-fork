@@ -1,16 +1,16 @@
 # Changelog
 
+## 0.4.5 — Superagent Conversation View
+
+- Register a **Superagent** tab in DSH's Conversation View row, alongside Chat and Trajectory (not in the Session-list row menu).
+- Opening the tab renders the selected Session's own Tickets, threads, execution and reports through its scoped management API.
+- Keep the homepage panel for shared profile settings only; local Worker Sessions remain standalone.
+
 ## 0.4.4 — Restore standalone Workers and add Session management entry
 
 - Revert local Ticket executors from native DSH subagents to standalone Worker Sessions.
 - Keep shared profile configuration and the homepage panel separate from local Session management.
-- Add **Manage this Session's Superagent** to each Session row menu; it opens a Session-filtered management view without changing the global settings panel.
-
-## 0.4.3 — Session-scoped management view
-
-- Roll back local native-subagent execution; local Tickets again use the standalone Worker Session lifecycle, IDs and displayed Worker session references.
-- Keep the homepage Superagent panel focused on shared profile settings without listing or selecting local Sessions.
-- Add **Manage this Session's Superagent** to each DSH Session row menu. It opens the selected Session's scoped Superagent view with that Session's Tickets, threads and execution state.
+- Add a session-specific management surface while retaining the global settings panel.
 
 ## 0.4.2 — Desktop Subagent recovery compatibility
 
