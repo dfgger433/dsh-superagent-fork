@@ -6,6 +6,10 @@ import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, t
   type ThreadFacts, type Ticket, type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { KV, type Family, type Key } from '../kv.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
+
+export type GlobalConfigurationChange = { kind: 'settings'; before: Settings; after: Settings; block: SettingsSave; origin: SettingsOrigin }
+  | { kind: 'prompts'; revision: number; origin: SettingsOrigin }
+type ConfigurationChangeListener = (source: Store, change: GlobalConfigurationChange) => void | Promise<void>
 import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, tooOld } from './migration.ts'
 import { Versions } from './versions.ts'
 import { storeReads } from './store-read.ts'
@@ -59,6 +63,7 @@ export class Store implements Repositories {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     this.read = storeReads(this.db)
+    this.settingsVersions = new Versions(this, KV.settings.revision, KV.settings.version)
     try {
       chmodSync(path, 0o600)
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
@@ -162,32 +167,78 @@ export class Store implements Repositories {
   }
   /** Reads a typed KV record by its key in `KV`. */
   get<V>(name: Key<V>): V | undefined {
+    if (this.configuration && this.isConfigurationKey(name)) return this.configuration.get(name)
     const row = this.db.prepare('SELECT value FROM kv WHERE key=?').get(name)
     return row === undefined ? undefined : JSON.parse(String(row.value)) as V
   }
   /** Writes a typed KV record under `name`. */
   set<V>(name: Key<V>, value: V): void {
+    if (this.configuration && this.isConfigurationKey(name)) { this.configuration.set(name, value); return }
     this.db.prepare('INSERT INTO kv VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(name, JSON.stringify(value))
   }
   /** Deletes the KV record at `name`. */
-  delete(name: string): void { this.db.prepare('DELETE FROM kv WHERE key=?').run(name) }
+  delete(name: string): void {
+    if (this.configuration && this.isConfigurationKey(name)) { this.configuration.delete(name); return }
+    this.db.prepare('DELETE FROM kv WHERE key=?').run(name)
+  }
   /** Returns all KV keys belonging to `family` or starting with `prefix`. */
   keys<V>(family: Family<V, never>): Key<V>[]
   keys(prefix: string): string[]
   keys(family: string | { prefix: string }): string[] {
     const prefix = typeof family === 'string' ? family : family.prefix
+    if (this.configuration && this.isConfigurationKey(prefix)) return typeof family === 'string'
+      ? this.configuration.keys(family) : this.configuration.keys(family as Family<unknown, never>)
     const pattern = `${prefix.replace(/[\\%_]/g, match => `\\${match}`)}%`
     return this.db.prepare("SELECT key FROM kv WHERE key LIKE ? ESCAPE '\\'").all(pattern).map(row => String(row.key))
   }
 
   /** Versioned settings snapshots; the current settings are the snapshot of the latest revision. */
-  private readonly settingsVersions = new Versions<SettingsVersion>(this, KV.settings.revision, KV.settings.version)
+  private readonly settingsVersions: Versions<SettingsVersion>
+  /** Profile-global settings and prompt records; all domain tables remain local to this Store. */
+  private configuration?: Store
+  private configurationListener?: ConfigurationChangeListener
+
+  /** Attaches the profile-global configuration database, seeding it from this Runtime once if it is empty. */
+  attachConfiguration(configuration: Store, listener?: ConfigurationChangeListener): void {
+    if (configuration === this) return
+    if (this.configuration) throw new Error('Store already has a configuration database')
+    if (!configuration.hasConfiguration()) configuration.importConfigurationFrom(this)
+    this.configuration = configuration
+    this.configurationListener = listener
+  }
+  /** Publish a durable global configuration change to the Host coordinator for other Runtime instances. */
+  async notifyConfigurationChange(change: GlobalConfigurationChange): Promise<void> {
+    if (!this.configuration || !this.configurationListener) return
+    await Promise.resolve(this.configurationListener(this, change)).catch(error => this.report(error))
+  }
+
+  /** The Store that owns global settings and prompt revisions. */
+  configurationStore(): Store { return this.configuration ?? this }
+  /** Run a prompt/configuration transaction against its owning database. */
+  configurationAtomic<T>(operation: () => T): T { return this.configurationStore().atomic(operation) }
+  private hasConfiguration(): boolean {
+    return this.db.prepare("SELECT 1 FROM kv WHERE key LIKE 'settings-%' OR key LIKE 'prompt-%' LIMIT 1").get() !== undefined
+  }
+  private importConfigurationFrom(source: Store): void {
+    if (this.hasConfiguration()) return
+    const rows = source.db.prepare("SELECT key, value FROM kv WHERE key LIKE 'settings-%' OR key LIKE 'prompt-%' ORDER BY key").all()
+    this.atomic(() => { for (const row of rows) this.set(String(row.key), JSON.parse(String(row.value))) })
+  }
+  private isConfigurationKey(name: string): boolean {
+    const exact = [KV.settings.revision, KV.prompts.revision]
+    const families = [KV.settings.block, KV.settings.version, KV.prompts.version, KV.prompts.builtIn]
+    return exact.includes(name as never) || families.some(family => name.startsWith(family.prefix))
+  }
   /** Current validated settings. */
-  settings(): Settings { return SettingsSchema.parse(this.settingsVersions.current()?.settings ?? {}) }
+  settings(): Settings {
+    if (this.configuration) return this.configuration.settings()
+    return SettingsSchema.parse(this.settingsVersions.current()?.settings ?? {})
+  }
   /** Revision of one settings block; each configuration page saves against its own block for optimistic concurrency. */
-  blockRevision(block: SettingsSave): number { return this.get(KV.settings.block(block)) ?? 0 }
+  blockRevision(block: SettingsSave): number { return this.configuration ? this.configuration.blockRevision(block) : this.get(KV.settings.block(block)) ?? 0 }
   /** Saves settings as the next revision (making it current) and increments `record.block`'s revision counter when present. */
   saveSettings(value: unknown, record: Omit<SettingsVersion, 'revision' | 'savedAt' | 'settings'> = { source: 'internal', policyVersion: '', policyChanged: false, notified: [] }): Settings {
+    if (this.configuration) return this.configuration.saveSettings(value, record)
     const settings = SettingsSchema.parse(value)
     return this.atomic(() => {
       this.settingsVersions.save(revision => ({ ...record, revision, savedAt: new Date().toISOString(), settings }))
@@ -196,7 +247,7 @@ export class Store implements Repositories {
     })
   }
   /** Saved settings revisions, newest first; revisions predating settings history are absent. */
-  settingsHistory(limit = 20): SettingsVersion[] { return this.settingsVersions.list(limit) }
+  settingsHistory(limit = 20): SettingsVersion[] { return this.configuration ? this.configuration.settingsHistory(limit) : this.settingsVersions.list(limit) }
 
   readonly triggers = {
     get: (id: string): Trigger | undefined => { const row = this.db.prepare('SELECT value FROM trigger WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as Trigger : undefined },

@@ -23,6 +23,28 @@ it('refuses databases newer than this build and rolls back failed atomic work', 
   store.set('schema', SCHEMA_VERSION + 1); store.close()
   expect(() => new Store(path)).toThrow('Unsupported')
 })
+it('shares only settings and prompt revisions while retaining independent domain tables', () => {
+  const seed = new Store(join(directory, 'seed.sqlite'))
+  const seedSettings = SettingsSchema.parse({ paused: true })
+  seed.saveSettings(seedSettings, { source: 'panel', block: 'pause', policyVersion: '', policyChanged: false, notified: [] })
+  seed.set(KV.prompts.revision, 1)
+  seed.set(KV.prompts.version(1), { revision: 1, previousRevision: 0, savedAt: '', source: 'panel', config: {} } as never)
+  const global = new Store(join(directory, 'global.sqlite'))
+  seed.attachConfiguration(global)
+  const second = new Store(join(directory, 'second.sqlite'))
+  second.attachConfiguration(global)
+
+  expect(second.settings().paused).toBe(true)
+  expect(second.get(KV.prompts.revision)).toBe(1)
+  second.tickets.save(ticket('only-second', 'open', [{ state: 'running' }]))
+  expect(seed.tickets.get('only-second')).toBeUndefined()
+  second.saveSettings({ ...second.settings(), paused: false }, { source: 'panel', block: 'pause', policyVersion: '', policyChanged: false, notified: [] })
+  expect(seed.settings().paused).toBe(false)
+  expect(seed.blockRevision('pause')).toBe(2)
+
+  seed.close(); second.close(); global.close()
+})
+
 it('finds triggers by thread', () => {
   const store = new Store(join(directory, 'orchestrator.sqlite'))
   store.triggers.save({ id: 'a', source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_%_x' }], actor: { source: 'feishu', id: 'u' }, human: true, at: '2', text: 'later', meta: {} })

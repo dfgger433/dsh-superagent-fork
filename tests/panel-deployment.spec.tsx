@@ -22,20 +22,16 @@ it('renders PluginConfig activation fallback without a PanelProvider and does no
   expect(requests).not.toContain('/orchestrator/api/state')
 })
 
-it('does not expose global ConfigForm mutation controls for a selected Session instance', async () => {
+it('renders global settings without a local Session selector', async () => {
   server.activation = { state: 'active', instances: [{ sessionId: 'session-A', state: 'active' }] }
-  const { form, mutations } = fakeForm()
+  const { form } = fakeForm()
   const container = document.createElement('div'); document.body.append(container)
   const root = createRoot(container)
   onTestFinished(() => { act(() => { root.unmount() }); container.remove() })
   await act(async () => { root.render(<PluginConfig t={translator(zh)} view="page" form={{ state: form.getSnapshot(), mutate: form.mutate }} />) })
   await settle()
-  const select = container.querySelector('select')!
-  await act(async () => { select.value = 'session-A'; select.dispatchEvent(new Event('change', { bubbles: true })) })
-  await settle()
-  expect(field<HTMLInputElement>(zh.deploymentPromptMaxChars).disabled).toBe(true)
-  expect(container.querySelector('.dt-savebar')).toBeNull()
-  expect(mutations).toEqual([])
+  expect(container.querySelector('select')).toBeNull()
+  expect(text()).toContain(zh.deploymentIntro)
 })
 
 it('saves this machine\'s settings in the Deployment settings through DSH\'s configuration form, without a restart', async () => {

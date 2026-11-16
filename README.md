@@ -8,9 +8,9 @@ dsh-superagent is a proactive coding agent for one GitHub repository, packaged a
 
 It is also a way of working with an agent: **take as little human attention as possible, and give as much value as possible.** An agent that can act for a whole team can also waste a whole team's attention, so it acts only when asked or when a rule the team wrote allows it, and speaks only when someone must act or can use a result. [docs/000-philosophy.md](docs/000-philosophy.md) explains the principle and what it asks of the operator.
 
-## Superagent preset fork (0.3.3)
+## Superagent preset fork (0.4.0)
 
-Each root conversation selecting the single **Superagent** preset gets its own independent instance, state database, settings, queues, Sources and Workers. The main Session only communicates and routes requests; it has no file write/edit, Shell, job or subagent tools. Ticket-owned Workers receive execution tools internally only after the Engine confirms ownership. Ordinary presets remain unchanged. With no remote configured, Workers can complete local work directly in the selected project.
+Each root conversation selecting the single **Superagent** preset gets its own independent task database, queues, Sources and execution state. Profile-wide configuration and prompt revisions are managed in the homepage Superagent panel; that panel does not select or manage local conversations. A Superagent Session is the user-facing conversation. Local Ticket executors appear as native DSH subagents/team members under that Session, with execution tools composed only after Ticket ownership is confirmed. The Router itself has no file write/edit or Shell tools. Ordinary presets remain unchanged. With no remote configured, local child agents work directly in the selected project.
 
 Windows Desktop (PowerShell 7) and Linux execution are supported. Read [Router installation and migration / 中文使用说明](docs/ROUTER.zh.md) first; it replaces the prototype's dedicated-profile and automatic-main-session setup for this branch. Original Policy, Tickets, Sources, panel, queues and worker recovery remain available. See [Changelog](docs/CHANGELOG.md) for the behavior changes and [local verification](docs/local/VERIFICATION.md) for tested limits.
 

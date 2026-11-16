@@ -115,6 +115,7 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
       return live.length > 0
     }),
     listChildren: vi.fn(async (id: string) => [...children].filter(([, child]) => child.parent === id).map(([childId]) => ({ id: childId }))),
+    registerChild: (id: string, parent: string) => children.set(id, { parent, live: true, settled: Promise.withResolvers<void>() }),
     drainChildren: vi.fn(async (_parent: { id: string }, ids: readonly string[]) => { for (const id of ids) settle(id) }),
     drainDescendants: vi.fn(async (parents: readonly { id: string }[]) => {
       for (const parent of parents) {
@@ -131,11 +132,11 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
     agents.set(id, { id, status: 'running', session: { header: { parentSession: parent } } } as never)
     return id
   }
-  return { service, settle, spawn, live: (id: string) => !!children.get(id)?.live }
+  return { service, settle, spawn, registerChild: service.registerChild, live: (id: string) => !!children.get(id)?.live }
 }
 
 /** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
-export async function startRuntime(seed?: (store: Store) => void, userRouter = false, local = false) {
+export async function startRuntime(seed?: (store: Store) => void, userRouter = false, local = false, nativeLocalChildren = false) {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
   const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot')
   const repository = { default_branch: 'master', permissions: { push: true } }
@@ -246,6 +247,25 @@ export async function startRuntime(seed?: (store: Store) => void, userRouter = f
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
+  if (nativeLocalChildren) Object.assign(subagents.service, {
+    startActivation: async (spec: { childId: string; request: { parent: { id: string }; prompt: { type: 'text'; text: string }[] } }) => {
+      await controller.create({ sessionId: spec.childId })
+      const agent = agents.get(spec.childId)! as unknown as Agent
+      ;(agent.session.header as { parentSession?: string }).parentSession = spec.request.parent.id
+      subagents.registerChild(spec.childId, spec.request.parent.id)
+      await ctx.parallel('agent/created', { agent } as never)
+      const messageId = `native-initial:${spec.childId}`
+      agent.followup({ id: messageId, role: 'user', content: spec.request.prompt, source: { kind: 'user' } } as never)
+      return { childId: spec.childId, messageId, result: new Promise(() => {}), dispose: async () => { subagents.settle(spec.childId) } }
+    },
+    prompt: async (request: { requestId: string; childSessionId: string; delivery: 'queue' | 'steer'; content: { type: 'text'; text: string }[] }) => {
+      const agent = agents.get(request.childSessionId)!
+      const messageId = `native:${request.requestId}`
+      const message = { id: messageId, role: 'user', content: request.content, source: { kind: 'user', rpcId: request.requestId } } as unknown as UserMessage
+      if (request.delivery === 'steer') agent.steer(message); else agent.followup(message)
+      return { messageId }
+    },
+  })
   for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
   const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } } }

@@ -10,7 +10,7 @@ import { GLOSSARY, GLOSSARY_VALUES, en, zh, type DshSuperagentKey } from './loca
 import { OverviewPage } from './overview.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
 import { HOME, TABS, initialLocation, lastSettingsGroup, remember, routeLabel, settingsRoute, type Location, type Route,
-  type Tab } from './route.ts'
+  type SettingsGroup, SETTINGS_GROUPS, type Tab } from './route.ts'
 import { SettingsPage } from './settings.tsx'
 import { SourceStatus } from './source.tsx'
 import { actorName, errorText, reasonLabel, valueLabel, type T, readableMarkers } from './text.ts'
@@ -185,5 +185,25 @@ export function App({ t, openSession, deploymentForm, sessionId }: AppProps) {
     ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })), [move])
   return <PanelProvider key={sessionId ?? 'legacy'} t={t} sessionId={sessionId} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>
     <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} />
+  </PanelProvider>
+}
+
+function GlobalSettingsPage({ group, deploymentForm }: { group: SettingsGroup; deploymentForm: DeploymentForm }) {
+  const { t, navigate } = usePanel()
+  const { state, error } = usePanelData()
+  if (error && !state) return <section className="dt-panel"><h1 className="dt-title">{t('title')}</h1><p className="dt-error" role="alert">{error.message}</p></section>
+  if (!state) return <p className="dt-hint">{t('loading')}</p>
+  return <div className="dt-page"><div className="dt-column">
+    <header className="dt-head"><div className="dt-head-title"><h1 className="dt-title">{t('title')}</h1></div></header>
+    <main className="dt-main"><SettingsPage group={group} query={{}} state={state} deploymentForm={deploymentForm} /></main>
+  </div></div>
+}
+
+/** Profile-wide settings surface. Local Session conversations and Ticket execution stay in their own DSH Sessions. */
+export function GlobalSettingsApp({ t, deploymentForm }: { t: T; deploymentForm: DeploymentForm }) {
+  const [group, setGroup] = useState<SettingsGroup>('source')
+  const navigate = useCallback((route: Route) => { if (route.page === 'settings') setGroup(route.query.group) }, [])
+  return <PanelProvider t={t} global interval={10_000} navigate={navigate}>
+    <GlobalSettingsPage group={group} deploymentForm={deploymentForm} />
   </PanelProvider>
 }

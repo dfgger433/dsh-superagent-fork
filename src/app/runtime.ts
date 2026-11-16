@@ -20,11 +20,11 @@ import { Commands } from '../infra/commands.ts'
 import type { Deployment, Machine } from '../deployment.ts'
 import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
 import type { SetupProblem } from '../setup.ts'
-import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
+import { DshExecutor, sourceTrigger, ticketOfSession, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { KV } from '../kv.ts'
-import { Store } from './store.ts'
+import { Store, type GlobalConfigurationChange } from './store.ts'
 import { evalsHealth } from './views/overview.ts'
 import { TextCache } from './cache.ts'
 import { Effects } from './effects.ts'
@@ -32,7 +32,7 @@ import { Prompts } from './prompts.ts'
 import { registerHttp, type HttpHost } from './http.ts'
 import type { LinkTarget } from './views/records.ts'
 import { candidateCard, repliedTo, sourceLink, type LinkHost } from './links.ts'
-import { eventNotice, followupNotice } from './notices.ts'
+import { eventNotice, followupNotice, promptsNotice } from './notices.ts'
 import { pullEndNotices } from '../sources/github-pull.ts'
 import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
@@ -86,7 +86,9 @@ export class Runtime extends Service implements SourceHost {
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
-  constructor(ctx: Context, readonly machine: Machine, restart: () => void, private readonly router?: Agent, private readonly isolatedSession = false) {
+  constructor(ctx: Context, readonly machine: Machine, restart: () => void, private readonly router?: Agent, private readonly isolatedSession = false,
+    sharedConfiguration?: Store,
+    configurationListener?: (source: Store, change: GlobalConfigurationChange) => void | Promise<void>) {
     super(ctx, 'orchestrator')
     const runtime = this
     // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
@@ -98,6 +100,7 @@ export class Runtime extends Service implements SourceHost {
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
+      if (sharedConfiguration) store.attachConfiguration(sharedConfiguration, configurationListener)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart, localAllowed: !!router })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
@@ -129,7 +132,7 @@ export class Runtime extends Service implements SourceHost {
       const chatMessages = router ? new ChatMessages(ctx, masterId) : undefined
       if (chatMessages) this.disposers.push(() => chatMessages.dispose())
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
-        promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
+        workerSessionId: id => this.workerSessionId(id), promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
         lifetime: this.lifetime, userRouter: !!router,
@@ -160,7 +163,7 @@ export class Runtime extends Service implements SourceHost {
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
-      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
+      this.executor = new DshExecutor({ context: ctx, masterId, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
         lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
         localDirectory: () => setup.configured() && setup.deployment.local ? router?.session.header.cwd ?? machine.stateDir : undefined,
         workerEnvironment: () => setup.workerEnvironment,
@@ -236,7 +239,7 @@ export class Runtime extends Service implements SourceHost {
     if (sessionId === this.masterId) return undefined
     let id: string | undefined = sessionId
     for (let depth = 0; id && depth < 32; depth++) {
-      const ticketId = id.startsWith('worker-') ? id.slice('worker-'.length) : undefined
+      const ticketId = ticketOfSession(id)
       if (ticketId) {
         const ticket = this.store.tickets.get(ticketId)
         return ticket && !ticket.ended ? this.setup.workerEnvironment : undefined
@@ -244,6 +247,10 @@ export class Runtime extends Service implements SourceHost {
       id = this.ctx.agents.get(id as SessionId)?.session.header.parentSession
     }
     return undefined
+  }
+  workerSessionId(ticketId: string): string {
+    const native = this.store.get(KV.runtime.nativeWorker(ticketId)) || !!this.router && (!this.setup.configured() || !!this.setup.deployment.local)
+    return workerSessionId(ticketId, native)
   }
   /** Explicit operator transfer is allowed only before work has been dispatched. */
   transferRouter(sessionId: string): void {
@@ -259,6 +266,11 @@ export class Runtime extends Service implements SourceHost {
     this.quiet++
     try { this.engine.attach(ticketId, triggerId) } finally { this.quiet-- }
     this.passes.request()
+  }
+  async applyGlobalConfigurationChange(change: GlobalConfigurationChange): Promise<void> {
+    if (this.closing()) return
+    if (change.kind === 'settings') await this.settings.applySharedChange(change)
+    else this.sessions.notify(...promptsNotice(change.revision))
   }
   receive(trigger: Trigger): ReceiveResult { return this.passes.receive(trigger) }
   idle(): Promise<void> { return this.passes.idle() }
@@ -291,6 +303,7 @@ export class Runtime extends Service implements SourceHost {
     this.effects.start()
     this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now() })
   }
+  managementHost(): HttpHost { return this.httpHost() }
   private httpHost(): HttpHost {
     const runtime = this
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
@@ -299,7 +312,7 @@ export class Runtime extends Service implements SourceHost {
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
-      checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
+      workerSessionId: id => runtime.workerSessionId(id), checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
   }
   /** Idempotent stop; concurrent or repeated calls share the same shutdown promise. */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
@@ -311,8 +324,12 @@ export class Runtime extends Service implements SourceHost {
     }
     try {
       await settle(() => this.assessor.stop())
-      const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
-      const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
+      const native = this.ctx.get('subagents') as { drainChildren(parent: Agent, childIds: readonly SessionId[]): Promise<void> } | undefined
+      if (native && this.router) await settle(() => native.drainChildren(this.router!, this.store.tickets.list()
+        .filter(ticket => this.store.get(KV.runtime.nativeWorker(ticket.id))).map(ticket => workerSessionId(ticket.id, true) as SessionId)))
+      const legacy = this.store.tickets.list().map(ticket => workerSessionId(ticket.id, false))
+      const agents = [this.ctx.agents.get(this.masterId as SessionId), ...legacy.map(id => this.ctx.agents.get(id as SessionId))]
+        .filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) await settle(() => agent.cancel({ kind: 'user' }, { keepInbox: true }))
       await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])
       await settle(() => this.executor.shutdown())

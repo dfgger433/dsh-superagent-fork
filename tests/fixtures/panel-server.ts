@@ -442,7 +442,7 @@ export function usePanelServer(cleanup: () => void) {
         server.requests.push({ path: 'superagent-status', method: 'GET' })
         return Response.json(server.activation)
       }
-      const path = address.pathname.replace(/^\/orchestrator\/(?:sessions\/[^/]+\/)?api\//, '')
+      const path = address.pathname.replace(/^\/orchestrator\/(?:global\/|sessions\/[^/]+\/)?api\//, '')
       const method = init?.method ?? 'GET'
       const body: unknown = init?.body ? JSON.parse(String(init.body)) : undefined
       server.requests.push({ path: decodeURIComponent(`${path}${address.search}`), method, ...body === undefined ? {} : { body } })

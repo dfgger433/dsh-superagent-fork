@@ -152,7 +152,7 @@ export class Prompts {
   private readonly versions: Versions<PromptVersion>
   constructor(private readonly store: Store, private readonly maxChars: () => number, private readonly environment: () => Variable[] | undefined,
     private readonly feishu: () => boolean, private readonly local: () => boolean = () => false) {
-    this.versions = new Versions(store, KV.prompts.revision, KV.prompts.version)
+    this.versions = new Versions(store.configurationStore(), KV.prompts.revision, KV.prompts.version)
   }
   /** A role's prompt; the main Session's Policy section follows the settings as they are now, at each model request. */
   compose(config: PromptConfig, role: Role, variables = this.environment(), local = this.local()): string {
@@ -222,7 +222,7 @@ export class Prompts {
   }
   save(value: unknown, baseRevision: number, source: SettingsOrigin): PromptVersion {
     const config = this.validate(value)
-    return this.store.atomic(() => {
+    const version = this.store.configurationAtomic(() => {
       const previous = this.current()
       if (previous.revision !== baseRevision) throw new PromptConflict(`Prompt version changed to ${previous.revision}; compare the latest version before saving`)
       // Persist the built-in defaults as revision 0 before recording the first custom revision.
@@ -234,6 +234,8 @@ export class Prompts {
       }
       return this.versions.save(revision => ({ revision, previousRevision: previous.revision, savedAt: new Date().toISOString(), source, config }))
     })
+    void this.store.notifyConfigurationChange({ kind: 'prompts', revision: version.revision, origin: source })
+    return version
   }
   history(offset = 0, limit = 20) {
     const current = this.current()

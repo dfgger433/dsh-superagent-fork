@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 — Session-native local execution and global management
+
+- The homepage Superagent panel is now a profile-wide settings surface. It manages shared Sources, policy, models, execution defaults and prompt revisions without selecting or managing a local conversation.
+- Local Ticket executors are native DSH subagents of their owning Superagent Session, so their task conversation, tools, reports and child-team activity appear in the DSH Session/subagent views. Remote deployments retain standalone Worker Sessions.
+- Ticket stores, chat intake, queues, Source cursors and execution state remain isolated per Superagent Session. Shared configuration is stored separately and propagated to active instances.
+- Existing local Worker Sessions are not silently re-parented; their Ticket identities remain legacy-compatible until a new assignment creates a native child.
+
 ## 0.3.3 — Deep runtime and Worker composition verification
 
 - Roll back partially constructed Runtime listeners and Source registrations before closing its database and lock.

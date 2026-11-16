@@ -1,23 +1,18 @@
 /** Browser plugin entry point registering the sidebar icon, main management panel, and Plugin Manager config view. */
-import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SidebarPanelIconOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { openKnownSession, SessionNavigationError } from '../navigation.ts'
-import { App } from './app.tsx'
+import { GlobalSettingsApp } from './app.tsx'
 import { usePoll } from './api.ts'
 import { PluginConfig, usePageForm } from './deployment.tsx'
 import { en, zh } from './locales.ts'
 import type { T } from './text.ts'
 
-type ClientContext = Context & { sessions: ISessions }
+type ClientContext = Context
 const NS = 'dshSuperagent'
 const PANEL_ID = 'dsh-superagent' as MainPanelId
 const ENTRY = 'dsh-superagent'
@@ -28,26 +23,12 @@ function HammerIcon({ size }: SidebarPanelIconOwnerProps) {
   </svg>
 }
 
-/** Mounted panel wrapper; cancels any pending Session navigation when a new one starts or the panel unmounts. */
 function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
-  const pending = useRef<AbortController>(undefined)
-  useEffect(() => () => { pending.current?.abort() }, [])
-  const openSession = useCallback(async (id: string) => {
-    pending.current?.abort()
-    const request = new AbortController(); pending.current = request
-    try {
-      await openKnownSession(ctx.sessions, id as SessionId, target => { ctx.uiWorkspace.openSession(target) }, request.signal)
-    } catch (error) {
-      if (error instanceof SessionNavigationError) throw new Error(t(error.code === 'not-ready' ? 'sessionListNotReady' : 'sessionNotListed'))
-      throw error
-    }
-  }, [ctx, t])
   const form = usePageForm(ctx.get('configForms')?.get<Record<string, unknown>>(ENTRY))
-  const [selected, setSelected] = useState('')
   const activation = usePoll(async () => {
     const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
     if (!response.ok) throw new Error(t('offline'))
-    return await response.json() as { state: string; sessionId?: string; error?: string; instances?: { sessionId: string; state: string; error?: string }[] }
+    return await response.json() as { state: string; error?: string; instances?: { state: string; error?: string }[] }
   }, [t])
   if (!activation.data && !activation.error) return <p className="dt-hint">{t('loading')}</p>
   if (activation.error || activation.data?.error || activation.data?.state === 'inactive' || activation.data?.state === 'stopped') return <section className="dt-panel">
@@ -56,21 +37,10 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
     {(activation.data?.error || activation.error) && <p role="alert" className="dt-error">{activation.data?.error ?? activation.error?.message}</p>}
     <p className="dt-hint">{t('routerActivationHint')}</p>
   </section>
-  const instances = activation.data?.instances
-  const instance = instances?.find(item => item.sessionId === selected)
-  return <>
-    {instances && <label>{t('routerInstance')} <select aria-label={t('routerInstance')} value={instance?.sessionId ?? ''} onChange={event => setSelected(event.target.value)}>
-      <option value="">{t('routerChooseInstance')}</option>
-      {instances.map(item => <option key={item.sessionId} value={item.sessionId}>{item.sessionId}</option>)}
-    </select></label>}
-    {instances && !instance ? <p className="dt-hint">{t('routerChooseInstance')}</p>
-      : instance?.error || instance && instance.state !== 'active' ? <p className="dt-error" role="alert">{instance.error ?? t('routerInactive')}</p>
-      : <><div className="dt-hint">{t('routerActive')}</div>
-        <App key={instance?.sessionId ?? 'legacy'} sessionId={instance?.sessionId} t={t} openSession={openSession} deploymentForm={instance ? undefined : form} /></>}
-  </>
+  return <GlobalSettingsApp t={t} deploymentForm={form} />
 }
 
-export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']
+export const inject = ['slots', 'locale']
 /** Registers the panel, sidebar icon, and Plugin Manager config view; `configForms` is optional (without it, machine settings are read-only). */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-superagent: dictionaries')

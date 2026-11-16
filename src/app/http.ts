@@ -23,7 +23,7 @@ import type { LinkTarget, ViewHost } from './views/records.ts'
 import type { Variable } from './execution-environment.ts'
 import { policyHistory } from './settings-history.ts'
 import { overview } from './views/overview.ts'
-import { settingsView } from './views/settings.ts'
+import { settingsView, type SettingsView } from './views/settings.ts'
 import { sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
@@ -54,6 +54,7 @@ export interface HttpHost {
   checkSetup(): void
   requestPass(): void
   models(): Promise<ModelCatalog>
+  workerSessionId(ticketId: string): string
 }
 /**
  * Represents a client-facing 400 or 404 error raised during management route parsing or lookup.
@@ -112,7 +113,8 @@ export function stateView(runtime: HttpHost) {
     maxWorkers: local ? 1 : settings.executor.maxWorkers },
     masterId: runtime.masterId, paused: settings.paused, health: runtime.health }
 }
-const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
+const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links(),
+  workerSession: ticketId => runtime.workerSessionId(ticketId) })
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
   problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem })
 export type StateView = ReturnType<typeof stateView>
@@ -235,18 +237,52 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
   if (ctx.webServer.host !== '127.0.0.1') throw new Error('Orchestrator management requires a loopback Web server')
   const table = routes(runtime)
   const prefix = runtime.apiPrefix ?? '/orchestrator'
-  const disposers = [
-    ctx.webServer.register({ kind: 'prefix', path: prefix, handler: async (req, res) => {
-      const url = new URL(req.url ?? '/', 'http://localhost')
-      if (!url.pathname.startsWith(`${prefix}/api/`)) { res.writeHead(404); res.end(); return }
-      if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
-      try {
-        await runtime.ready
-        const route = match(table, req.method ?? 'GET', url.pathname.slice(`${prefix}/api/`.length).split('/'))
-        if (!route) throw new RouteError(404, 'Unknown operation')
-        const query = Object.fromEntries(url.searchParams)
-        json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
-      } catch (error) { json(res, ...failure(error)) }
-    } })]
+  const disposers = [ctx.webServer.register({ kind: 'prefix', path: prefix, handler: async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    if (!url.pathname.startsWith(`${prefix}/api/`)) { res.writeHead(404); res.end(); return }
+    if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+    try {
+      await runtime.ready
+      const route = match(table, req.method ?? 'GET', url.pathname.slice(`${prefix}/api/`.length).split('/'))
+      if (!route) throw new RouteError(404, 'Unknown operation')
+      const query = Object.fromEntries(url.searchParams)
+      json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
+    } catch (error) { json(res, ...failure(error)) }
+  } })]
   return () => { for (const dispose of disposers) dispose() }
+}
+
+/** Registers a settings-only profile endpoint that proxies through an active Runtime without exposing its local Ticket data. */
+export function registerGlobalSettingsHttp(ctx: Context, getRuntime: () => HttpHost | undefined, globalStateDir?: string): () => void {
+  if (ctx.webServer.host !== '127.0.0.1') throw new Error('Orchestrator management requires a loopback Web server')
+  const prefix = '/orchestrator/global'
+  return ctx.webServer.register({ kind: 'prefix', path: prefix, handler: async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    if (!url.pathname.startsWith(`${prefix}/api/`)) { res.writeHead(404); res.end(); return }
+    if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+    try {
+      const runtime = getRuntime()
+      if (!runtime) throw new RouteError(404, 'Open a Superagent Session once to initialize the shared settings service')
+      await runtime.ready
+      const method = req.method ?? 'GET'
+      const allowed = new Set(['GET state', 'GET settings', 'PUT settings/:block', 'GET policy/history', 'POST policy-sync/:id',
+        'POST sources/:id/labels', 'POST setup/check', 'GET models', 'GET prompts', 'PUT prompts', 'POST prompts/preview'])
+      const table = Object.fromEntries(Object.entries(routes(runtime)).filter(([name]) => allowed.has(name))) as Routes
+      const route = match(table, method, url.pathname.slice(`${prefix}/api/`.length).split('/'))
+      if (!route) throw new RouteError(404, 'Unknown global settings operation')
+      const query = Object.fromEntries(url.searchParams)
+      const value = await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) })
+      if (method === 'GET' && url.pathname.endsWith('/state')) {
+        const state = value as StateView
+        json(res, 200, { ...state, setup: { ...state.setup, machine: { ...state.setup.machine, ...(globalStateDir ? { stateDir: globalStateDir } : {}) } },
+          masterId: 'global', load: { running: 0, queued: 0, maxWorkers: state.load.maxWorkers }, health: {} })
+      } else if (method === 'GET' && url.pathname.endsWith('/settings')) {
+        const settings = value as SettingsView
+        json(res, 200, { ...settings, environment: { ...settings.environment, root: globalStateDir ?? settings.environment.root } })
+      } else if (method === 'GET' && url.pathname.endsWith('/prompts')) {
+        const { sessions: _sessions, notificationPending: _pending, ...prompts } = value as PromptsView
+        json(res, 200, { ...prompts, sessions: [], notificationPending: false })
+      } else json(res, 200, value)
+    } catch (error) { json(res, ...failure(error)) }
+  } })
 }

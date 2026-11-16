@@ -23,7 +23,7 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
   for (const key of ['tools', 'skills', 'systemPrompt']) targetCtx.reflect.provide(key, agentCtx.get(key))
   const target = { ...agent, ctx: targetCtx, id: 'target-router' }
   const services = {
-    subprocess: {}, sessionController: { resolveAgent: async (id: string) => id === target.id ? { agent: target } : { error: { code: 'session/not-found' } } }, workspaceRegistry: {}, permissionPresets: {}, tools: {}, systemPrompt: {}, skills: {}, llm: {},
+    subprocess: {}, subagents: {}, sessionController: { resolveAgent: async (id: string) => id === target.id ? { agent: target } : { error: { code: 'session/not-found' } } }, workspaceRegistry: {}, permissionPresets: {}, tools: {}, systemPrompt: {}, skills: {}, llm: {},
     agents: { list: () => [agent], get: (id: string) => id === agent.id ? agent : undefined },
     agentPresets: { presetForSession: () => 'dsh-superagent-router' },
     webServer: { host: '127.0.0.1', port: 1234, register: (route: { path: string; handler: (req: unknown, res: unknown) => Promise<void> }) => {
@@ -63,7 +63,11 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
     expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.masterId).toBe('target-router')
     expect(await call('/orchestrator/sessions/fresh-router/api/executor/pause', '/orchestrator/sessions/fresh-router', { paused: true })).toMatchObject({ status: 200 })
     expect((await call('/orchestrator/sessions/fresh-router/api/state', '/orchestrator/sessions/fresh-router')).value.paused).toBe(true)
-    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.paused).toBe(false)
+    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.paused).toBe(true)
+    const globalState = await call('/orchestrator/global/api/state', '/orchestrator/global')
+    expect(globalState).toMatchObject({ status: 200, value: { masterId: 'global', load: { running: 0, queued: 0 }, paused: true } })
+    expect((await call('/orchestrator/global/api/tickets', '/orchestrator/global')).status).toBe(404)
+    expect((await call('/orchestrator/global/api/settings', '/orchestrator/global')).status).toBe(200)
     await root.parallel('agent/disposed', { agent } as never)
     expect(routes.has('/orchestrator/sessions/fresh-router')).toBe(false)
     expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).status).toBe(200)
@@ -71,8 +75,8 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
 })
 let h: Host | undefined
 afterEach(async () => { await h?.stop(); h = undefined })
-it('executes a local-only ticket without any remote account, CLI probe, Git repository or remote call', async () => {
-  h = await startRuntime(undefined, true, true)
+it('executes local tickets as native Router subagents without any remote account or remote call', async () => {
+  h = await startRuntime(undefined, true, true, true)
   const { runtime } = h
   expect(runtime.configured()).toBe(true)
   expect(runtime.deployment.local).toBe(true)
@@ -87,11 +91,14 @@ it('executes a local-only ticket without any remote account, CLI probe, Git repo
   await runtime.idle()
   const id = (result.ticket as { ticket_id: string }).ticket_id
   const ticket = runtime.store.tickets.get(id)!
+  const childId = `worker-${id}-subagent`
   expect(ticket.assignments.at(-1)?.state).toBe('running')
   expect(ticket.execution?.directory).toBe(h.directory)
   expect(h.subprocess.spawn).not.toHaveBeenCalled()
-  expect(runtime.environmentFor(`worker-${id}`)).not.toHaveProperty('GIT_CONFIG_GLOBAL')
-  await h.runTool(`worker-${id}`, 'orchestrator_report', { state: 'ready', summary: 'Local task completed.' })
+  expect((h.agents.get(childId) as unknown as { session: { header: { parentSession?: string } } })?.session.header.parentSession).toBe(runtime.masterId)
+  expect(runtime.environmentFor(childId)).not.toHaveProperty('GIT_CONFIG_GLOBAL')
+  expect(h.subagents.live(childId)).toBe(true)
+  await h.runTool(childId, 'orchestrator_report', { state: 'ready', summary: 'Local task completed.' })
   await runtime.idle()
   expect(h.deliveries.mock.calls.some(([call]) => call.sessionId === runtime.masterId && call.text.includes('Local task completed.'))).toBe(true)
   expect(runtime.commands.gh).not.toHaveBeenCalled()

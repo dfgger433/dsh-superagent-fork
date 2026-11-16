@@ -257,6 +257,7 @@ export class Sessions {
     const master = agent.id === host.masterId
     const ticket = master ? undefined : this.ticketOf(agent)
     if (!master && !ticket) { await this.limitSubagent(agent); return }
+    if (!master && ticket && agent.session.header.parentSession) await initializeRoleModel(host.context, agent, host.store.settings().executor.model)
     const binding: SessionBinding = { disposers: [] }
     this.bindings.set(agent, binding)
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())

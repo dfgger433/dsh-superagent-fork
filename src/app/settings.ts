@@ -11,7 +11,7 @@ import { resolveRoleModel } from './role-models.ts'
 import { changedPaths, settingsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
 import { setupChanged, type Setup } from './setup.ts'
-import type { Store } from './store.ts'
+import type { GlobalConfigurationChange, Store } from './store.ts'
 import { KV } from '../kv.ts'
 
 /**
@@ -54,7 +54,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
 
 /** Host dependencies used by `Settings`. */
 export interface SettingsHost {
-  readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'get'>
+  readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'get' | 'notifyConfigurationChange' | 'configurationStore'>
   readonly sources: SourceRegistry
   /** Notified when a settings save changes the policy version. */
   readonly engine: EngineForSettings
@@ -178,7 +178,7 @@ export class Settings {
     const scope = (version: SettingsValue) => ({
       scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
     const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, SettingsSchema.parse(settings), scope)
-    const notified = [...effects.keys()]
+    const notified = store.configurationStore() === store ? [...effects.keys()] : []
     store.atomic(() => {
       store.saveSettings(SettingsSchema.parse(settings), { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
       if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(old, settings)))
@@ -192,8 +192,33 @@ export class Settings {
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
     if (restarting) this.host.setup.restart()
     else this.host.requestPass()
+    await store.notifyConfigurationChange({ kind: 'settings', before: old, after: settings, block, origin })
     return { saved: true, revision: store.blockRevision(block), policy_changed: before !== after, restarting, context_delivery: delivery }
   }
+  /** Applies a configuration revision written by another Runtime to this Runtime's isolated Tickets and live components. */
+  async applySharedChange(change: GlobalConfigurationChange): Promise<void> {
+    if (change.kind !== 'settings') return
+    const { before, after, block } = change
+    const { store, engine, sessions, setup } = this.host
+    if (block === 'pause') {
+      sessions.notify(...settingsNotice(block, changedPaths(before, after)))
+      this.host.requestPass()
+      return
+    }
+    const previousPolicy = policyVersion(before), nextPolicy = policyVersion(after)
+    if (previousPolicy !== nextPolicy) {
+      const scope = (version: SettingsValue) => ({ scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
+      const effects = policyEffects(store.tickets.open(), before, after, scope)
+      engine.policyChanged(previousPolicy, nextPolicy, effects)
+    }
+    sessions.notify(...settingsNotice(block, changedPaths(before, after)))
+    if (before.executor.blockedCommands.join(' ') !== after.executor.blockedCommands.join(' ')) {
+      await setup.blockCommands(after.executor.blockedCommands)
+    }
+    if (setupChanged(before, after) || !setup.configured()) setup.restart()
+    else this.host.requestPass()
+  }
+
   /**
    * Pauses or resumes processing (new evaluations, worker dispatch, and channel delivery, while Sources continue recording
    * Triggers); saved in its own `'pause'` block so concurrent `executor` edits remain valid across it.
@@ -203,13 +228,15 @@ export class Settings {
     const { store, sessions } = this.host
     const old = store.settings()
     if (old.paused === paused) return { paused }
+    const after = { ...old, paused }
     store.atomic(() => {
       const record = { source: origin, block: 'pause' as const, policyVersion: policyVersion(old), policyChanged: false, notified: [] }
-      store.saveSettings({ ...old, paused }, record)
+      store.saveSettings(after, record)
       if (origin !== 'tool') sessions.notify(...settingsNotice('pause', ['paused']))
     })
     await sessions.delivery('settings:pause')
     this.host.requestPass()
+    await store.notifyConfigurationChange({ kind: 'settings', before: old, after, block: 'pause', origin })
     return { paused }
   }
   /** Returns the IDs of installed, enabled Sources whose policy section can synchronize now (empty while setup is not configured). */

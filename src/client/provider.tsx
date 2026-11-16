@@ -71,15 +71,15 @@ function Toast({ text, onDone, holdMs = 3000 }: { text: string; onDone: () => vo
 }
 const stay = () => {}
 const noSession = async () => {}
-export function PanelProvider({ t, interval = 5000, sessionId, openSession = noSession, navigate = stay, back = stay, backLabel = '', children }: {
-  t: T; interval?: number; sessionId?: string; openSession?: (sessionId: string) => Promise<void>; navigate?: PanelContext['navigate']; back?: () => void
+export function PanelProvider({ t, interval = 5000, sessionId, global = false, openSession = noSession, navigate = stay, back = stay, backLabel = '', children }: {
+  t: T; interval?: number; sessionId?: string; global?: boolean; openSession?: (sessionId: string) => Promise<void>; navigate?: PanelContext['navigate']; back?: () => void
   backLabel?: string
   children: ReactNode
 }) {
   // Read the current translator via ref so locale changes do not recreate `call` and restart polling.
   const copy = useRef(t)
   copy.current = t
-  const call = useMemo(() => caller(() => messages(copy.current), sessionId), [sessionId])
+  const call = useMemo(() => caller(() => messages(copy.current), sessionId, global), [sessionId, global])
   const [toast, setToast] = useState<{ text: string; id: number }>()
   const notify = useCallback((text: string) => setToast({ text, id: Date.now() }), [])
   // Poll at 1s during a restart until the server goes down and answers again, or time out after 30s if the restart completed between polls.

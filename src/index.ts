@@ -2,26 +2,38 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-settings'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { lockSync } from 'proper-lockfile'
+import { Store, type GlobalConfigurationChange } from './app/store.ts'
 import { Runtime } from './app/runtime.ts'
 import { RouterController } from './app/router-controller.ts'
 import { ROUTER_PRESET, LEGACY_WORKER_PRESETS } from './app/sessions.ts'
 import { protectRouter } from './app/router-boundary.ts'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
-import { sameOrigin } from './app/http.ts'
+import { registerGlobalSettingsHttp, sameOrigin } from './app/http.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 import { key } from './core/ids.ts'
 import * as githubSource from './sources/github.ts'
 import * as feishuSource from './sources/feishu.ts'
 
 export const name = 'dsh-superagent'
-export const inject = ['agents', 'agentPresets', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
+export const inject = ['agents', 'agentPresets', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess', 'subagents']
 export { Config }
 export async function apply(ctx: Context, config: DeploymentConfig): Promise<void> {
   const machine = machineOf(config)
+  const configurationDir = join(machine.stateDir, 'global-config')
+  mkdirSync(configurationDir, { recursive: true, mode: 0o700 })
+  const releaseConfigurationLock = lockSync(configurationDir, { stale: 30_000 })
+  const configuration = new Store(join(configurationDir, 'settings.sqlite'), error => ctx.logger.warn('dsh-superagent global settings: %s', String(error)))
   ctx.inject(['settings'], child => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
   const runtimes = new Map<string, Runtime>()
   const errors = new Map<string, string>()
+  const configurationListener = async (source: Store, change: GlobalConfigurationChange) => {
+    const targets = [...runtimes.values()].filter(runtime => runtime.store !== source)
+    const results = await Promise.allSettled(targets.map(runtime => runtime.applyGlobalConfigurationChange(change)))
+    for (const result of results) if (result.status === 'rejected') ctx.logger.warn('dsh-superagent could not apply shared configuration: %s', String(result.reason))
+  }
   const protectedRoots = new Map<Agent, () => void>()
   const notices = new Map<Agent, () => void>()
   const protect = (agent: Agent) => {
@@ -32,6 +44,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     for (const runtime of runtimes.values()) { const env = runtime.environmentFor(id); if (env) return env }
     return undefined
   } })
+  ctx.effect(() => registerGlobalSettingsHttp(ctx, () => runtimes.values().next().value?.managementHost(), machine.stateDir))
   const controller = new RouterController<Agent>(async agent => {
     const isolated = ctx.isolate('orchestrator')
     let runtime: Runtime | undefined
@@ -46,7 +59,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
         promptMaxChars: snapshot(machine.promptMaxChars) as typeof machine.promptMaxChars,
         admissionContextMaxPages: snapshot(machine.admissionContextMaxPages) as typeof machine.admissionContextMaxPages,
         admissionContextTimeoutMs: snapshot(machine.admissionContextTimeoutMs) as typeof machine.admissionContextTimeoutMs }
-      runtime = new Runtime(child, perSession, restart, agent, true)
+      runtime = new Runtime(child, perSession, restart, agent, true, configuration, configurationListener)
       runtimes.set(agent.id, runtime)
       child.effect(() => async () => {
         try { await runtime!.stop() }
@@ -128,14 +141,16 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     await controller.release(agent.id)
   })
   ctx.effect(() => async () => {
-    let stopError: unknown
-    try { await controller.stop() } catch (error) { stopError = error }
+    const failures: unknown[] = []
+    try { await controller.stop() } catch (error) { failures.push(error) }
     finally {
       for (const release of protectedRoots.values()) release()
       for (const release of notices.values()) release()
       protectedRoots.clear(); notices.clear(); errors.clear()
+      try { configuration.close() } catch (error) { failures.push(error) }
+      try { releaseConfigurationLock() } catch (error) { failures.push(error) }
     }
-    if (stopError) throw stopError
+    if (failures.length) throw new AggregateError(failures, 'Superagent coordinator shutdown had cleanup failures')
   })
   await Promise.all(ctx.agents.list().filter(selected).map(activate))
   ctx.logger.info('Superagent ready: each selected root Session owns an independent instance')
