@@ -67,7 +67,6 @@ interface NativeSubagents {
     signal: AbortSignal; delivery: 'caller' }): Promise<{ childId: SessionId; messageId: string; result: Promise<unknown>; dispose(): Promise<void> }>
   prompt(request: { requestId: string; parentSessionId: SessionId; childSessionId: SessionId; mode: 'continuable'; delivery: 'queue' | 'steer';
     content: { type: 'text'; text: string }[] }, signal: AbortSignal): Promise<{ messageId: string }>
-  listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<readonly { id: SessionId; depth: number; activity: 'running' | 'inactive' }[]>
   drainChildren(parent: Agent, childIds: readonly SessionId[]): Promise<void>
 }
 
@@ -262,6 +261,11 @@ export class DshExecutor implements Executor {
   private workerId(ticketId: string): string {
     const native = this.host.store.get(KV.runtime.nativeWorker(ticketId)) || !!this.nativeSubagents()
     return workerSessionId(ticketId, native)
+  }
+  private async nativeChildExists(sessionId: string): Promise<boolean> {
+    if (this.host.context.agents.get(sessionId as SessionId)) return true
+    const persistence = this.host.context.sessionPersistence as unknown as { stat(id: SessionId, options?: { signal?: AbortSignal }): Promise<unknown> }
+    return await persistence.stat(sessionId as SessionId, { signal: this.host.lifetime }) !== undefined
   }
   private async subagentPrompt(sessionId: string, requestId: string, text: string, delivery: 'queue' | 'steer'): Promise<void> {
     const service = this.nativeSubagents()
@@ -508,8 +512,7 @@ export class DshExecutor implements Executor {
       const prompt = JSON.stringify({ ticket_id: ticket.id, assignment_id: assignment.id, title: ticket.title,
         ...(brief ? { assignment: brief } : {}), ...(read ? { assignment_chars: chars, assignment_read: read } : {}), ...(card ? { trigger: card } : {}),
         ...(batch.length ? { batch } : {}), ...retried })
-      const children = await subagents.listDescendants(parent.id as SessionId, this.host.lifetime)
-      const exists = children.some(child => child.depth === 1 && child.id === sessionId)
+      const exists = await this.nativeChildExists(sessionId)
       if (exists) {
         const controller = this.host.context.sessionController as unknown as { inspect(id: SessionId): Promise<{ events: { type: string; data?: { content?: { type?: string; text?: string }[] } }[] }> }
         const log = await controller.inspect(sessionId as SessionId)

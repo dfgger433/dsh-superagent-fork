@@ -236,10 +236,10 @@ export async function startRuntime(seed?: (store: Store) => void, userRouter = f
     }),
     selectModel: vi.fn(async () => {}), resolveAgent: vi.fn(resolveDefault), rename: vi.fn(async () => {}),
     prompt: vi.fn(() => { throw new Error('Plugin delivery must not use user RPC') }),
-    inspect: vi.fn(async () => ({ events: [] })),
+    inspect: vi.fn(async (id: string) => { if (!agents.has(id)) throw Object.assign(new Error('Session not found'), { code: 'session/not-found' }); return { events: [] } }),
   }
   const reader = { read: async () => ({ events: [] }), close: async () => {}, [Symbol.asyncDispose]: async () => {} }
-  const persistence = { flush: vi.fn(async () => {}), open: vi.fn(async () => reader) }
+  const persistence = { flush: vi.fn(async () => {}), open: vi.fn(async () => reader), stat: vi.fn(async (id: string) => agents.has(id) ? { header: { id } } : undefined) }
   const webServer = { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }
   const jobs = jobRegistry(id => agents.get(id))
   const subagents = subagentRuntime(agents)
