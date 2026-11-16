@@ -50,7 +50,7 @@ it('registers a localized main panel, sidebar entry and Plugin Manager row page,
   const { entries, dictionaries, main, nav } = fixture([])
   expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'conversation.view', 'plugins.row.config'])
   expect(entries[3]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
-  expect(entries[2]!.options).toMatchObject({ id: 'dsh-superagent', label: expect.any(Function), order: 1, locale: 'dshSuperagent' })
+  expect(entries[2]!.options).toMatchObject({ id: 'dsh-superagent', label: expect.any(Function), order: 30, locale: 'dshSuperagent' })
   expect(Object.keys(dictionaries)).toEqual(['dshSuperagent'])
   expect(main.options).toMatchObject({ key: 'dsh-superagent', locale: 'dshSuperagent' })
   expect(nav.options).toMatchObject({ id: 'dsh-superagent', order: 10, locale: 'dshSuperagent' })
@@ -70,7 +70,7 @@ it('registers the Superagent Conversation View and scopes its management API to 
   serve({ state: 'active', instances: [{ sessionId: 'session-view', state: 'active' }] })
   const { entries } = fixture(['session-view'])
   const viewEntry = entries.find(entry => entry.options.name === 'conversation.view')!
-  expect(viewEntry.options).toMatchObject({ id: 'dsh-superagent', label: expect.any(Function), order: 1 })
+  expect(viewEntry.options).toMatchObject({ id: 'dsh-superagent', label: expect.any(Function), order: 30 })
   expect(viewEntry.options.label?.()).toBe('Superagent')
   const view = await render(viewEntry, { t, sessionId: 'session-view', inspectCall: undefined, viewRequest: null,
     openView: vi.fn(), completeViewRequest: vi.fn() })

@@ -91,7 +91,14 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS, inject: () => ({}) }, PanelEntry))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 10, label: () => t('panel'), locale: NS }, HammerIcon))
-  ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 1,
+  const registerConversationView = (slots: ClientContext['slots']) => slots.inject('conversation.view', () => slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
+    label: () => t('sessionSuperagentView'), locale: NS }, SuperagentConversationView))
+  const inject = (ctx as unknown as { inject?: (names: string[], callback: (context: Context) => void) => void }).inject
+  if (typeof inject === 'function') inject.call(ctx, ['slots'], viewCtx => {
+    const slots = viewCtx.get('slots') as ClientContext['slots'] | undefined
+    if (slots) viewCtx.effect(() => registerConversationView(slots), 'dsh-superagent: conversation view')
+  })
+  else ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
     label: () => t('sessionSuperagentView'), locale: NS }, SuperagentConversationView))
   ctx.slots.inject('plugins.row.config', () => ctx.slots.register({ name: 'plugins.row.config', key: `${ENTRY}#${ENTRY}`, locale: NS },
     (props: PluginConfigViewProps & { t: T }) => <PluginConfig t={props.t} view={props.view} form={props.form} />))
