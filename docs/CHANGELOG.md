@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — Desktop Subagent API compatibility
+
+- Use the Desktop 0.2.2-rc.3 `listDescendants()` contract for direct-child discovery; do not call the unavailable `listChildren()` method.
+- Filter by direct depth and running activity before stopping team members, preserving settled catalog entries and cold-resume discovery.
+- Check the target local Ticket's failed launch and report can now be retried after upgrading the plugin.
+
 ## 0.4.0 — Session-native local execution and global management
 
 - The homepage Superagent panel is now a profile-wide settings surface. It manages shared Sources, policy, models, execution defaults and prompt revisions without selecting or managing a local conversation.

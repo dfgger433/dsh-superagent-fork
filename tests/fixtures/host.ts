@@ -114,7 +114,8 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
       await Promise.all(live.map(child => child.settled.promise))
       return live.length > 0
     }),
-    listChildren: vi.fn(async (id: string) => [...children].filter(([, child]) => child.parent === id).map(([childId]) => ({ id: childId }))),
+    listDescendants: vi.fn(async (id: string) => [...children].flatMap(([childId, child]) => child.parent === id
+      ? [{ id: childId, depth: 1, activity: child.live ? 'running' as const : 'inactive' as const }] : [])),
     registerChild: (id: string, parent: string) => children.set(id, { parent, live: true, settled: Promise.withResolvers<void>() }),
     drainChildren: vi.fn(async (_parent: { id: string }, ids: readonly string[]) => { for (const id of ids) settle(id) }),
     drainDescendants: vi.fn(async (parents: readonly { id: string }[]) => {

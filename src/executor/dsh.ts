@@ -67,7 +67,7 @@ interface NativeSubagents {
     signal: AbortSignal; delivery: 'caller' }): Promise<{ childId: SessionId; messageId: string; result: Promise<unknown>; dispose(): Promise<void> }>
   prompt(request: { requestId: string; parentSessionId: SessionId; childSessionId: SessionId; mode: 'continuable'; delivery: 'queue' | 'steer';
     content: { type: 'text'; text: string }[] }, signal: AbortSignal): Promise<{ messageId: string }>
-  listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<readonly { id: SessionId }[]>
+  listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<readonly { id: SessionId; depth: number; activity: 'running' | 'inactive' }[]>
   drainChildren(parent: Agent, childIds: readonly SessionId[]): Promise<void>
 }
 
@@ -261,7 +261,6 @@ export class DshExecutor implements Executor {
   }
   private workerId(ticketId: string): string {
     const native = this.host.store.get(KV.runtime.nativeWorker(ticketId)) || !!this.nativeSubagents()
-    if (native) this.host.store.set(KV.runtime.nativeWorker(ticketId), true)
     return workerSessionId(ticketId, native)
   }
   private async subagentPrompt(sessionId: string, requestId: string, text: string, delivery: 'queue' | 'steer'): Promise<void> {
@@ -509,17 +508,21 @@ export class DshExecutor implements Executor {
       const prompt = JSON.stringify({ ticket_id: ticket.id, assignment_id: assignment.id, title: ticket.title,
         ...(brief ? { assignment: brief } : {}), ...(read ? { assignment_chars: chars, assignment_read: read } : {}), ...(card ? { trigger: card } : {}),
         ...(batch.length ? { batch } : {}), ...retried })
-      const children = await subagents.listChildren(parent.id as SessionId, this.host.lifetime)
-      const exists = children.some(child => child.id === sessionId)
+      const children = await subagents.listDescendants(parent.id as SessionId, this.host.lifetime)
+      const exists = children.some(child => child.depth === 1 && child.id === sessionId)
       if (exists) {
-        const log = await this.host.context.sessionController.inspect(sessionId as SessionId)
-        const alreadyAccepted = log.events.some(event => event.type === 'user/message' && event.data.content.some(block =>
-          block.type === 'text' && block.text.includes(`\"assignment_id\":\"${assignment.id}\"`)))
+        const controller = this.host.context.sessionController as unknown as { inspect(id: SessionId): Promise<{ events: { type: string; data?: { content?: { type?: string; text?: string }[] } }[] }> }
+        const log = await controller.inspect(sessionId as SessionId)
+        const alreadyAccepted = log.events.some(event => event.type === 'user/message' && event.data?.content?.some(block =>
+          block.type === 'text' && block.text?.includes(`\"assignment_id\":\"${assignment.id}\"`)))
         if (!alreadyAccepted) await this.subagentPrompt(sessionId, assignment.id, prompt, 'queue')
       } else {
         const activation = await subagents.startActivation({ provider: 'spawn', label: ticket.title, childId: sessionId as SessionId,
           request: { parent, cwd: workspace, prompt: [{ type: 'text', text: prompt }] }, signal: this.host.lifetime, delivery: 'caller' })
-        void activation.result.catch(error => this.background(Promise.resolve().then(() => this.launchFailed(ticket.id, assignment.id, error))))
+        this.host.store.set(KV.runtime.nativeWorker(ticket.id), true)
+        void activation.result.then(result => {
+          if ((result as { stopReason?: unknown }).stopReason !== 'completed') this.launchFailed(ticket.id, assignment.id, result)
+        }, error => this.launchFailed(ticket.id, assignment.id, error))
       }
       if (!current()) return
       this.host.engine.assignmentStarted(ticket.id, assignment.id)
