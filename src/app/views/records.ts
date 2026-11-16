@@ -5,11 +5,12 @@ import { canRetry, followupOwners, latestReport, liveTicket, settled, threadKey,
 import { allowedSender, listedBot } from '../../policy.ts'
 import type { ChannelLink, Localized } from '../../sources/kind.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
+import { workerSessionId } from '../../executor/dsh.ts'
 import type { Store } from '../store.ts'
 import { attribute, markdown, plain, preview, readable } from './text.ts'
 
 export type LinkTarget = (channel: ChannelRef) => ChannelLink
-export interface ViewHost { store: Store; sources: SourceRegistry; links: LinkTarget; workerSession?: (ticketId: string) => string }
+export interface ViewHost { store: Store; sources: SourceRegistry; links: LinkTarget }
 export const page = <T>(items: T[], offset: number, limit: number) => ({ items: items.slice(offset, offset + limit), total: items.length, next_offset: offset + limit < items.length ? offset + limit : null })
 const DAY = 86_400_000
 export const dayAgo = () => new Date(Date.now() - DAY).toISOString()
@@ -114,7 +115,7 @@ function ticketNote(ticket: Ticket, stage: TicketStage): { text: string; error: 
   if ((stage.action !== 'blocked' && stage.action !== 'failed') || !summary) return undefined
   return { text: preview(summary.split('\n')[0]!), error: stage.action === 'failed' }
 }
-export function ticketSummary(ticket: Ticket, workerSession: (ticketId: string) => string = id => `worker-${id}`) {
+export function ticketSummary(ticket: Ticket) {
   const stage = ticketStage(ticket)
   const note = ticketNote(ticket, stage)
   const state = liveTicket(ticket) ? 'open' as const : 'ended' as const
@@ -124,7 +125,7 @@ export function ticketSummary(ticket: Ticket, workerSession: (ticketId: string) 
       assignments: ticket.assignments.length, inputs: ticket.inputs.length, undelivered: ticket.undelivered.length,
     // Every started Assignment of a Ticket runs in its one shared worker Session.
     deliveryError: attribute(ticket.delivery?.error), sessionId: ticket.assignments.some(item => item.startedAt)
-      ? workerSession(ticket.id) : '',
+      ? workerSessionId(ticket.id) : '',
     directory: attribute(ticket.execution?.directory), summary: latestReport(ticket)?.summary ?? '', createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt }
 }
@@ -137,7 +138,7 @@ export function threadFacts(store: Store, thread: Thread) {
   return { key: thread.key, source: thread.ref.source, title: threadTitle(store, thread), ...url ? { url } : {}, facts: (thread.meta.facts ?? {}) as ThreadFacts }
 }
 export type ThreadFactsView = ReturnType<typeof threadFacts>
-export const ticketLine = (view: Snapshot, ticket: Ticket) => ({ ...view.workerSession ? ticketSummary(ticket, view.workerSession) : ticketSummary(ticket),
+export const ticketLine = (view: Snapshot, ticket: Ticket) => ({ ...ticketSummary(ticket),
   threads: view.threadsOf(ticket.id).map(thread => threadFacts(view.store, thread)) })
 export function threadTitle(store: Pick<Store, 'read'>, thread: Thread): string {
   const label = attribute(thread.meta.label)

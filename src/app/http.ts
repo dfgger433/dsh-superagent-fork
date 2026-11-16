@@ -54,7 +54,6 @@ export interface HttpHost {
   checkSetup(): void
   requestPass(): void
   models(): Promise<ModelCatalog>
-  workerSessionId(ticketId: string): string
 }
 /**
  * Represents a client-facing 400 or 404 error raised during management route parsing or lookup.
@@ -113,8 +112,7 @@ export function stateView(runtime: HttpHost) {
     maxWorkers: local ? 1 : settings.executor.maxWorkers },
     masterId: runtime.masterId, paused: settings.paused, health: runtime.health }
 }
-const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links(),
-  workerSession: ticketId => runtime.workerSessionId(ticketId) })
+const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
   problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem })
 export type StateView = ReturnType<typeof stateView>

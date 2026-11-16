@@ -16,7 +16,8 @@ interface Jobs {
 /** What the Executor uses of DSH's subagents: joining a worker's subagents that work, its subagents, and releasing them. */
 interface Subagents {
   waitForChildren(parent: Agent): Promise<boolean>
-  listDescendants(rootSessionId: string): Promise<readonly { id: string; depth: number; activity: 'running' | 'inactive' }[]>
+  listChildren?: (parentSessionId: string) => Promise<readonly { id: string }[]>
+  listDescendants?: (rootSessionId: string) => Promise<readonly { id: string; depth: number; activity: 'running' | 'inactive' }[]>
   drainChildren(parent: Agent, childIds: readonly string[]): Promise<void>
 }
 /** How long a stop waits for a killed job to end, collecting its end so the worker is not woken to hear of it. */
@@ -141,11 +142,10 @@ export async function collectJob(ctx: Context, sessionId: string, job: { id: str
 export async function stopSubagents(ctx: Context, agent: Agent, keepInbox = false): Promise<void> {
   const subagents = subagentsOf(ctx)
   if (!subagents) return
-  const registry = ctx.get('agents') as { list?: () => readonly Agent[] } | undefined
-  // The live registry is sufficient for teardown; draining a direct child also releases its descendants.
-  const live = typeof registry?.list === 'function'
-    ? registry.list().filter(child => child.session.header.parentSession === agent.id).map(child => child.id)
-    : (await subagents.listDescendants(agent.id)).filter(child => child.depth === 1 && child.activity === 'running').map(child => child.id)
+  // The catalog lists every subagent the Session had; one that ended has no agent.
+  const listed = subagents.listChildren ? await subagents.listChildren(agent.id)
+    : subagents.listDescendants ? (await subagents.listDescendants(agent.id)).filter(child => child.depth === 1 && child.activity === 'running') : []
+  const live = listed.map(child => child.id).filter(id => ctx.agents.get(id as SessionId))
   if (!live.length) return
   try { await until(subagents.drainChildren(agent, live), undefined, DRAIN_LIMIT_MS) }
   finally {

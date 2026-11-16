@@ -30,7 +30,7 @@ export const KV = {
     /** The built-in text of a prompt part an override was edited from, by its `base`, which shows what an upgrade changed. */
     builtIn: family<string, [base: string]>('prompt-built-in:') },
   /** Runtime: the main Session's ID. */
-  runtime: { masterId: record<string>('master-id'), routerOwner: record<string>('router-owner'), legacyMasterId: record<string>('legacy-master-id'), chatRoute: family<{ ticketId?: string }>('chat-route:'), nativeWorker: family<boolean, [ticket: string]>('native-worker:') },
+  runtime: { masterId: record<string>('master-id'), routerOwner: record<string>('router-owner'), legacyMasterId: record<string>('legacy-master-id'), chatRoute: family<{ ticketId?: string }>('chat-route:') },
   /** Sessions: prompt revisions each Session has worked under, ordered oldest first; the last entry (`.at(-1)`) is its active revision. */
   sessions: { prompts: family<number[], [session: string]>('session-prompts:') },
   /** Schema 11 migration: legacy main-Session queues imported into the effect table. */

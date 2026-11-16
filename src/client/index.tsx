@@ -1,18 +1,27 @@
 /** Browser plugin entry point registering the sidebar icon, main management panel, and Plugin Manager config view. */
+import { useEffect, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { openKnownSession, SessionNavigationError } from '../navigation.ts'
 import type { SidebarPanelIconOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-import { GlobalSettingsApp } from './app.tsx'
+import { App, GlobalSettingsApp } from './app.tsx'
 import { usePoll } from './api.ts'
 import { PluginConfig, usePageForm } from './deployment.tsx'
 import { en, zh } from './locales.ts'
 import type { T } from './text.ts'
 
-type ClientContext = Context
+type ClientContext = Context & {
+  sessions: ISessions
+  uiWorkspace: { openSession(target: SessionId): void }
+  layout: { selectPanel(id: MainPanelId): void }
+}
 const NS = 'dshSuperagent'
 const PANEL_ID = 'dsh-superagent' as MainPanelId
 const ENTRY = 'dsh-superagent'
@@ -23,8 +32,16 @@ function HammerIcon({ size }: SidebarPanelIconOwnerProps) {
   </svg>
 }
 
-function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
+function Mounted({ ctx, t, sessionId }: { ctx: ClientContext; t: T; sessionId?: string }) {
   const form = usePageForm(ctx.get('configForms')?.get<Record<string, unknown>>(ENTRY))
+  const openSession = async (id: string) => {
+    try {
+      await openKnownSession(ctx.sessions, id as SessionId, target => ctx.uiWorkspace.openSession(target), new AbortController().signal)
+    } catch (error) {
+      if (error instanceof SessionNavigationError) throw new Error(t(error.code === 'not-ready' ? 'sessionListNotReady' : 'sessionNotListed'))
+      throw error
+    }
+  }
   const activation = usePoll(async () => {
     const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
     if (!response.ok) throw new Error(t('offline'))
@@ -37,17 +54,34 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
     {(activation.data?.error || activation.error) && <p role="alert" className="dt-error">{activation.data?.error ?? activation.error?.message}</p>}
     <p className="dt-hint">{t('routerActivationHint')}</p>
   </section>
+  if (sessionId) return <App t={t} sessionId={sessionId} sessionOnly openSession={openSession} deploymentForm={form} />
   return <GlobalSettingsApp t={t} deploymentForm={form} />
 }
 
-export const inject = ['slots', 'locale']
-/** Registers the panel, sidebar icon, and Plugin Manager config view; `configForms` is optional (without it, machine settings are read-only). */
+export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace', 'layout']
+/** Registers the global panel, the session-scoped panel entry, and the Plugin Manager config view. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-superagent: dictionaries')
   const t = ctx.locale.bind(NS)
-  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS, inject: () => ({}) },
-    (props: { t: T }) => <Mounted ctx={ctx} t={props.t} />))
+  let selectedSession: string | undefined
+  const listeners = new Set<(id: string | undefined) => void>()
+  const selectSession = (id?: string) => { selectedSession = id; for (const listener of listeners) listener(id) }
+  function PanelEntry(props: { t: T }) {
+    const [sessionId, setSessionId] = useState(selectedSession)
+    useEffect(() => { listeners.add(setSessionId); return () => { listeners.delete(setSessionId) } }, [])
+    return <Mounted ctx={ctx} t={props.t} sessionId={sessionId} />
+  }
+  function SessionMenuItem(props: { sessionId: SessionId; displayTitle: string; useMenuOpenState: () => readonly [boolean, (open: boolean) => void] }) {
+    const [, setMenuOpen] = props.useMenuOpenState()
+    return <button type="button" role="menuitem" className="dt-textlink" onClick={() => {
+      setMenuOpen(false)
+      selectSession(props.sessionId)
+      ctx.layout.selectPanel(PANEL_ID)
+    }}>{t('sessionSuperagent')}</button>
+  }
+  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS, inject: () => ({}) }, PanelEntry))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 10, label: () => t('panel'), locale: NS }, HammerIcon))
+  ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: `${ENTRY}-session-menu`, order: 400, locale: NS }, SessionMenuItem))
   ctx.slots.inject('plugins.row.config', () => ctx.slots.register({ name: 'plugins.row.config', key: `${ENTRY}#${ENTRY}`, locale: NS },
     (props: PluginConfigViewProps & { t: T }) => <PluginConfig t={props.t} view={props.view} form={props.form} />))
 }

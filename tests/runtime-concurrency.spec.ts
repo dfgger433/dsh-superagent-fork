@@ -609,9 +609,9 @@ describe('a worker whose work runs in the background', () => {
     await h.acceptedTicket(feishu('1', '@bot 修一'))
     const queued = await h.acceptedTicket(feishu('5', '@bot 修二'))
     expect(h.agents.has(queued.sessionId)).toBe(false)
-    // A missing Agent parent cannot be drained; catalog lookup remains cold-safe and returns no children.
-    const list = h.subagents.service.listDescendants.getMockImplementation()!
-    h.subagents.service.listDescendants.mockImplementation(async (id: string) => {
+    // DSH cannot list the children of a Session that does not exist.
+    const list = h.subagents.service.listChildren.getMockImplementation()!
+    h.subagents.service.listChildren.mockImplementation(async (id: string) => {
       if (id === queued.sessionId) throw new Error('SESSION_QUERY_SESSION_NOT_FOUND')
       return list(id)
     })

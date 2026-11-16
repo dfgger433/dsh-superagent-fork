@@ -20,7 +20,7 @@ function fixture(listed: string[]) {
     locale: { register: (ns: string, value: unknown) => { dictionaries[ns] = value; return () => {} }, bind: () => t },
     effect: (effect: () => unknown) => { effect() },
     sessions: { list: { getSnapshot: () => ({ phase: 'ready', byId: Object.fromEntries(listed.map(id => [id, {}])) }) }, refresh: vi.fn(async () => {}) },
-    uiWorkspace: { openSession: vi.fn() },
+    uiWorkspace: { openSession: vi.fn() }, layout: { selectPanel: vi.fn() },
     // Omit config form service so Deployment renders read-only.
     get: () => undefined,
   }
@@ -48,8 +48,9 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 it('registers a localized main panel, sidebar entry and Plugin Manager row page, and no settings section', () => {
   const { entries, dictionaries, main, nav } = fixture([])
-  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'plugins.row.config'])
-  expect(entries[2]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
+  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'sidebar.workspaces.session.menu.item', 'plugins.row.config'])
+  expect(entries[3]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
+  expect(entries[2]!.options).toMatchObject({ id: 'dsh-superagent-session-menu', locale: 'dshSuperagent' })
   expect(Object.keys(dictionaries)).toEqual(['dshSuperagent'])
   expect(main.options).toMatchObject({ key: 'dsh-superagent', locale: 'dshSuperagent' })
   expect(nav.options).toMatchObject({ id: 'dsh-superagent', order: 10, locale: 'dshSuperagent' })
@@ -63,6 +64,21 @@ it('shows activation diagnostics instead of falling through to the app when Rout
   expect(view.container.textContent).toContain(zh.routerActivationFailed)
   expect(view.container.textContent).toContain('stateDir is required')
   view.dispose()
+})
+
+it('opens session-specific Superagent management from the Session row menu', async () => {
+  serve({ state: 'active', instances: [{ sessionId: 'session-menu', state: 'active' }] })
+  const { ctx, main, entries } = fixture(['session-menu'])
+  const view = await render(main, { t })
+  const menu = entries.find(entry => entry.options.name === 'sidebar.workspaces.session.menu.item')!
+  let closeMenu: (open: boolean) => void = () => {}
+  const item = await render(menu, { sessionId: 'session-menu', displayTitle: 'Local Superagent', useMenuOpenState: () => [true, closeMenu = vi.fn()] })
+  await act(async () => { item.container.querySelector('[role="menuitem"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(ctx.layout.selectPanel).toHaveBeenCalledExactlyOnceWith('dsh-superagent')
+  expect(closeMenu).toHaveBeenCalledExactlyOnceWith(false)
+  expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toContain('/orchestrator/sessions/session-menu/api/state')
+  item.dispose(); view.dispose()
 })
 
 it('uses the profile-wide settings endpoint without selecting or opening a local Session', async () => {

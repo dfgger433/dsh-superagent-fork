@@ -23,6 +23,7 @@ export interface AppProps {
   t: T; openSession: (sessionId: string) => Promise<void>
   deploymentForm: DeploymentForm
   sessionId?: string
+  sessionOnly?: boolean
 }
 
 function Glossary({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -139,7 +140,7 @@ function Header({ masterId }: { masterId: string | undefined }) {
   </header>
 }
 
-function Pages({ route, openTab, deploymentForm }: { route: Route; openTab: (tab: Tab) => void; deploymentForm: DeploymentForm }) {
+function Pages({ route, openTab, deploymentForm, tabs }: { route: Route; openTab: (tab: Tab) => void; deploymentForm: DeploymentForm; tabs: readonly Tab[] }) {
   const { t } = usePanel()
   const { state, error, reload } = usePanelData()
   // Keep the active tab scrolled into view on narrow screens when routes change via links.
@@ -164,15 +165,19 @@ function Pages({ route, openTab, deploymentForm }: { route: Route; openTab: (tab
       <Header masterId={state?.masterId} />
       {error && state && <p className="dt-error" role="status">{error.message}</p>}
       <SegmentedTabs className="dt-tabs" label={t('pagesLabel')} value={route.page} onChange={openTab}
-        items={TABS.map(value => ({ value, label: t(`tab.${value}`), id: `dt-tab-${value}`, panelId: 'dt-page' }))} />
+        items={tabs.map(value => ({ value, label: t(`tab.${value}`), id: `dt-tab-${value}`, panelId: 'dt-page' }))} />
       <main id="dt-page" role="tabpanel" aria-labelledby={`dt-tab-${route.page}`} className="dt-main">{page}</main>
     </div>
   </div>
 }
 
 /** Root panel component managing route history and shared panel state. */
-export function App({ t, openSession, deploymentForm, sessionId }: AppProps) {
-  const [location, setLocation] = useState(initialLocation)
+export function App({ t, openSession, deploymentForm, sessionId, sessionOnly = false }: AppProps) {
+  const tabs = sessionOnly ? TABS.filter(tab => tab !== 'settings') : TABS
+  const [location, setLocation] = useState(() => {
+    const initial = initialLocation()
+    return sessionOnly && initial.route.page === 'settings' ? { route: HOME, stack: [] } : initial
+  })
   useEffect(() => { remember(location) }, [location])
   // Preserve the last opened settings group across navigation so the Settings tab reopens at it.
   const move = useCallback((next: (current: Location) => Pick<Location, 'route' | 'stack'>) =>
@@ -184,7 +189,7 @@ export function App({ t, openSession, deploymentForm, sessionId }: AppProps) {
   const openTab = useCallback((tab: Tab) => move(current => ({ stack: [], route: tab === 'settings'
     ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })), [move])
   return <PanelProvider key={sessionId ?? 'legacy'} t={t} sessionId={sessionId} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>
-    <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} />
+    <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} tabs={tabs} />
   </PanelProvider>
 }
 

@@ -7,7 +7,7 @@
       config:
         id: dsh-superagent-router
         name: Superagent
-        description: 每个会话是独立 Superagent 对话与 Ticket 空间；主页集中管理共享设置，本地执行器显示为会话子代理。支持纯本地和可选远端来源。
+        description: 每个会话是独立 Superagent 对话与 Ticket 空间；主页管理共享设置，会话菜单打开当前会话的 Superagent 管理视图。支持纯本地和可选远端来源。
         order: 10
         plugins:
           - id: time-context

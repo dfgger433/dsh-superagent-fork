@@ -20,7 +20,7 @@ import { Commands } from '../infra/commands.ts'
 import type { Deployment, Machine } from '../deployment.ts'
 import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
 import type { SetupProblem } from '../setup.ts'
-import { DshExecutor, sourceTrigger, ticketOfSession, triggerMessage, workerSessionId } from '../executor/dsh.ts'
+import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { KV } from '../kv.ts'
@@ -132,7 +132,7 @@ export class Runtime extends Service implements SourceHost {
       const chatMessages = router ? new ChatMessages(ctx, masterId) : undefined
       if (chatMessages) this.disposers.push(() => chatMessages.dispose())
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
-        workerSessionId: id => this.workerSessionId(id), promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
+        promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
         lifetime: this.lifetime, userRouter: !!router,
@@ -163,7 +163,7 @@ export class Runtime extends Service implements SourceHost {
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
-      this.executor = new DshExecutor({ context: ctx, masterId, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
+      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
         lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
         localDirectory: () => setup.configured() && setup.deployment.local ? router?.session.header.cwd ?? machine.stateDir : undefined,
         workerEnvironment: () => setup.workerEnvironment,
@@ -239,7 +239,7 @@ export class Runtime extends Service implements SourceHost {
     if (sessionId === this.masterId) return undefined
     let id: string | undefined = sessionId
     for (let depth = 0; id && depth < 32; depth++) {
-      const ticketId = ticketOfSession(id)
+      const ticketId = id.startsWith('worker-') ? id.slice('worker-'.length) : undefined
       if (ticketId) {
         const ticket = this.store.tickets.get(ticketId)
         return ticket && !ticket.ended ? this.setup.workerEnvironment : undefined
@@ -247,10 +247,6 @@ export class Runtime extends Service implements SourceHost {
       id = this.ctx.agents.get(id as SessionId)?.session.header.parentSession
     }
     return undefined
-  }
-  workerSessionId(ticketId: string): string {
-    const native = this.store.get(KV.runtime.nativeWorker(ticketId)) || !!this.router && (!this.setup.configured() || !!this.setup.deployment.local)
-    return workerSessionId(ticketId, native)
   }
   /** Explicit operator transfer is allowed only before work has been dispatched. */
   transferRouter(sessionId: string): void {
@@ -312,7 +308,7 @@ export class Runtime extends Service implements SourceHost {
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
-      workerSessionId: id => runtime.workerSessionId(id), checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
+      checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
   }
   /** Idempotent stop; concurrent or repeated calls share the same shutdown promise. */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
@@ -324,12 +320,8 @@ export class Runtime extends Service implements SourceHost {
     }
     try {
       await settle(() => this.assessor.stop())
-      const native = this.ctx.get('subagents') as { drainChildren(parent: Agent, childIds: readonly SessionId[]): Promise<void> } | undefined
-      if (native && this.router) await settle(() => native.drainChildren(this.router!, this.store.tickets.list()
-        .filter(ticket => this.store.get(KV.runtime.nativeWorker(ticket.id))).map(ticket => workerSessionId(ticket.id, true) as SessionId)))
-      const legacy = this.store.tickets.list().map(ticket => workerSessionId(ticket.id, false))
-      const agents = [this.ctx.agents.get(this.masterId as SessionId), ...legacy.map(id => this.ctx.agents.get(id as SessionId))]
-        .filter((agent): agent is Agent => agent !== undefined)
+      const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
+      const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) await settle(() => agent.cancel({ kind: 'user' }, { keepInbox: true }))
       await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])
       await settle(() => this.executor.shutdown())
