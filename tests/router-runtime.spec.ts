@@ -33,6 +33,8 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
   for (const [key, value] of Object.entries(services)) root.reflect.provide(key, value)
   // Parse the exact empty configuration a fresh bundle row supplies, isolating only its state directory.
   const config = Config({})
+  let promptLimit = 100000
+  config.promptMaxChars = { get: () => promptLimit } as never
   config.stateDir = dir
   const plugin = root.plugin({ name: 'first-install-smoke', apply: ctx => apply(ctx, config) })
   try {
@@ -63,8 +65,13 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
     expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.masterId).toBe('target-router')
     expect(await call('/orchestrator/sessions/fresh-router/api/executor/pause', '/orchestrator/sessions/fresh-router', { paused: true })).toMatchObject({ status: 200 })
     expect((await call('/orchestrator/sessions/fresh-router/api/state', '/orchestrator/sessions/fresh-router')).value.paused).toBe(true)
-    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.paused).toBe(true)
+    expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.paused).toBe(false)
     expect((await call('/orchestrator/global/api/settings', '/orchestrator/global')).status).toBe(200)
+    promptLimit = 70000
+    for (const id of ['fresh-router', 'target-router']) {
+      expect((await call(`/orchestrator/sessions/${id}/api/state`, `/orchestrator/sessions/${id}`)).value.setup.machine.promptMaxChars).toBe(70000)
+      expect((await call(`/orchestrator/sessions/${id}/api/overview`, `/orchestrator/sessions/${id}`)).value.executor.maxWorkers).toBe(1)
+    }
     await root.parallel('agent/disposed', { agent } as never)
     expect(routes.has('/orchestrator/sessions/fresh-router')).toBe(false)
     expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).status).toBe(200)

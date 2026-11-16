@@ -8,7 +8,7 @@ import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { expect, it } from 'vitest'
 import ToolsService from '@deepseek-ai/dsh-tools'
 import { ROUTER_PRESET } from '../src/app/sessions.ts'
-import { mountWorker, resolveWorkerModulePath, workerModules, SUPERAGENT_PRESET, type WorkerModuleLoader } from '../src/worker-composition.ts'
+import { mountWorker, resolveWorkerModulePath, workerModuleSearchPaths, workerModules, SUPERAGENT_PRESET, type WorkerModuleLoader } from '../src/worker-composition.ts'
 
 interface Row { id?: string; name: string; config?: Record<string, unknown> & { plugins?: Row[] } | Row[] }
 async function patched(): Promise<Row[]> {
@@ -46,14 +46,27 @@ it('keeps execution tools in the internal composition with native shell, bounded
     for (const name of ['@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-skill']) expect(modules.some(row => row.name === name)).toBe(true)
   }
 })
-it('resolves Worker packages from the profile package root when the bundled app root has no package', () => {
+it('pins Worker packages to the executing desktop Host even when tool environment names an older installation', () => {
   const root = mkdtempSync(join(tmpdir(), 'superagent-worker-resolution-'))
   try {
-    const packageRoot = join(root, 'node_modules', '@deepseek-ai', 'dsh-persona')
-    mkdirSync(join(packageRoot, 'lib'), { recursive: true })
-    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-persona', main: 'lib/index.js' }))
-    writeFileSync(join(packageRoot, 'lib', 'index.js'), 'export default {}')
-    expect(resolveWorkerModulePath('@deepseek-ai/dsh-persona', [join(root, 'bundled-app'), root])).toBe(join(packageRoot, 'lib', 'index.js'))
+    const packages = join(root, 'desktop', 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai')
+    const cli = join(packages, 'dsh'), host = join(packages, 'dsh-desktop-host')
+    for (const [directory, name] of [[cli, '@deepseek-ai/dsh'], [host, '@deepseek-ai/dsh-desktop-host']] as const) {
+      mkdirSync(directory, { recursive: true })
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ name, version: '0.2.2-rc.3' }))
+    }
+    const module = join(packages, 'dsh-persona')
+    mkdirSync(join(module, 'lib'), { recursive: true })
+    writeFileSync(join(module, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-persona', version: '0.2.2-rc.3', main: 'lib/index.js' }))
+    writeFileSync(join(module, 'lib', 'index.js'), 'export default {}')
+    const anchors = workerModuleSearchPaths({ entry: join(host, 'lib', 'index.js'), installDir: join(root, 'old-profile') })
+    expect(anchors).toEqual([cli])
+    expect(resolveWorkerModulePath('@deepseek-ai/dsh-persona', anchors)).toBe(join(module, 'lib', 'index.js'))
+    expect(workerModuleSearchPaths({ electron: true, executable: join(root, 'desktop', 'DeepSeek Harness.exe') })).toEqual([cli])
+    writeFileSync(join(module, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-persona', version: '0.2.2-rc.1', main: 'lib/index.js' }))
+    expect(() => resolveWorkerModulePath('@deepseek-ai/dsh-persona', anchors)).toThrow('does not match Host')
+    expect(() => resolveWorkerModulePath('@deepseek-ai/dsh-tool-fs', [cli, join(root, 'old-profile')])).toThrow('in Host installation')
+    expect(workerModuleSearchPaths({ entry: join(root, 'workspace', 'test.js') })).toEqual([])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

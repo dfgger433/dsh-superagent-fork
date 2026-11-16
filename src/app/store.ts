@@ -202,6 +202,7 @@ export class Store implements Repositories {
   attachConfiguration(configuration: Store, listener?: ConfigurationChangeListener): void {
     if (configuration === this) return
     if (this.configuration) throw new Error('Store already has a configuration database')
+    if (this.get(KV.runtime.paused) === undefined) this.set(KV.runtime.paused, this.settings().paused)
     if (!configuration.hasConfiguration()) configuration.importConfigurationFrom(this)
     this.configuration = configuration
     this.configurationListener = listener
@@ -225,20 +226,30 @@ export class Store implements Repositories {
     this.atomic(() => { for (const row of rows) this.set(String(row.key), JSON.parse(String(row.value))) })
   }
   private isConfigurationKey(name: string): boolean {
+    if (name === KV.settings.block('pause')) return false
     const exact = [KV.settings.revision, KV.prompts.revision]
     const families = [KV.settings.block, KV.settings.version, KV.prompts.version, KV.prompts.builtIn]
     return exact.includes(name as never) || families.some(family => name.startsWith(family.prefix))
   }
   /** Current validated settings. */
   settings(): Settings {
-    if (this.configuration) return this.configuration.settings()
+    if (this.configuration) return { ...this.configuration.settings(), paused: this.get(KV.runtime.paused) ?? false }
     return SettingsSchema.parse(this.settingsVersions.current()?.settings ?? {})
   }
   /** Revision of one settings block; each configuration page saves against its own block for optimistic concurrency. */
-  blockRevision(block: SettingsSave): number { return this.configuration ? this.configuration.blockRevision(block) : this.get(KV.settings.block(block)) ?? 0 }
+  blockRevision(block: SettingsSave): number { return this.configuration && block !== 'pause' ? this.configuration.blockRevision(block) : this.get(KV.settings.block(block)) ?? 0 }
   /** Saves settings as the next revision (making it current) and increments `record.block`'s revision counter when present. */
   saveSettings(value: unknown, record: Omit<SettingsVersion, 'revision' | 'savedAt' | 'settings'> = { source: 'internal', policyVersion: '', policyChanged: false, notified: [] }): Settings {
-    if (this.configuration) return this.configuration.saveSettings(value, record)
+    if (this.configuration) {
+      const settings = SettingsSchema.parse(value)
+      if (record.block === 'pause') return this.atomic(() => {
+        this.set(KV.runtime.paused, settings.paused)
+        this.set(KV.settings.block('pause'), this.blockRevision('pause') + 1)
+        return this.settings()
+      })
+      this.configuration.saveSettings({ ...settings, paused: this.configuration.settings().paused }, record)
+      return this.settings()
+    }
     const settings = SettingsSchema.parse(value)
     return this.atomic(() => {
       this.settingsVersions.save(revision => ({ ...record, revision, savedAt: new Date().toISOString(), settings }))

@@ -2,7 +2,8 @@
 import type { Context, Fiber, Plugin } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { readFileSync, realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { apply as applyExecutionScope, inject as executionScopeInject } from './execution-scope.ts'
 
@@ -28,26 +29,65 @@ export const workerModules = (platform = process.platform): WorkerModule[] => [
 export type WorkerModuleLoader = (name: string) => Promise<Plugin>
 const require = createRequire(import.meta.url)
 
-/**
- * DSH keeps shared packages in the profile parent while the Desktop Host's
- * `DSH_INSTALL_DIR` points at the bundled app. Search both layouts so dynamic
- * Worker composition uses the packages installed by the running Host.
- */
-export function workerModuleSearchPaths(): string[] {
-  const profile = process.env.DSH_PROFILE_DIR ?? (process.env.DSH_HOME
-    ? join(process.env.DSH_HOME, 'profiles', process.env.DSH_PROFILE ?? 'default')
-    : undefined)
-  return [...new Set([process.env.DSH_INSTALL_DIR, profile, import.meta.dirname, process.cwd()].filter((path): path is string => !!path))]
+/** Facts from the Host process, rather than managed tool subprocess environment variables. */
+export interface WorkerRuntimeLocation { entry?: string; executable?: string; electron?: boolean; installDir?: string }
+const manifest = (directory: string): { name?: string; version?: string } | undefined => {
+  try { return JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) }
+  catch { return undefined }
+}
+const cliAt = (directory: string): string | undefined => {
+  for (const candidate of [directory, join(directory, 'node_modules', '@deepseek-ai', 'dsh')]) {
+    if (manifest(candidate)?.name === '@deepseek-ai/dsh') return realpathSync(candidate)
+  }
+}
+
+/** One verified installation owns every official Worker module; never fall through to profile or workspace copies. */
+export function workerModuleSearchPaths(location: WorkerRuntimeLocation = {
+  entry: process.argv[1], executable: process.execPath, electron: !!process.versions.electron, installDir: process.env.DSH_INSTALL_DIR,
+}): string[] {
+  if (location.entry) {
+    for (let directory = dirname(location.entry); ; directory = dirname(directory)) {
+      const name = manifest(directory)?.name
+      if (name === '@deepseek-ai/dsh' || name === '@deepseek-ai/dsh-desktop-host') {
+        const cli = cliAt(name === '@deepseek-ai/dsh' ? directory : join(directory, '..', 'dsh'))
+        if (!cli) throw new Error(`Worker Host installation has no DSH package beside ${directory}`)
+        return [cli]
+      }
+      if (dirname(directory) === directory) break
+    }
+  }
+  if (location.electron && location.executable) {
+    const cli = cliAt(join(dirname(location.executable), 'resources', 'app.asar', 'dsh'))
+    if (cli) return [cli]
+  }
+  const cli = location.installDir && cliAt(location.installDir)
+  return cli ? [cli] : []
 }
 
 export function resolveWorkerModulePath(name: string, paths = workerModuleSearchPaths()): string {
-  let lastError: unknown
-  for (const path of paths) {
-    try { return require.resolve(name, { paths: [path] }) }
-    catch (error) { lastError = error }
+  const anchor = paths[0]
+  if (!anchor) throw new Error(`Cannot resolve Worker module ${name}: current Host installation is unavailable`)
+  // Absolute candidates prevent Node's ancestor/global lookup from silently importing another DSH release.
+  const candidates = [join(anchor, 'node_modules', name), join(dirname(anchor), '..', name)]
+  const errors: unknown[] = []
+  for (const candidate of candidates) {
+    try {
+      const path = require.resolve(candidate)
+      const expected = manifest(anchor)?.version, actual = manifest(candidate)?.version
+      if (expected && actual !== expected) throw new Error(`Worker module ${name} version ${actual ?? 'unknown'} does not match Host ${expected}`)
+      return path
+    } catch (error) { errors.push(error) }
   }
-  const detail = lastError instanceof Error ? `: ${lastError.message}` : ''
-  throw new Error(`Cannot resolve Worker module ${name}; searched ${paths.join(', ')}${detail}`, { cause: lastError })
+  throw new Error(`Cannot resolve Worker module ${name} in Host installation ${anchor}: ${errors.map(String).join('; ')}`, { cause: new AggregateError(errors) })
+}
+
+/** Read-only status data: paths and versions make a stale or mixed installation visible before execution. */
+export function workerModuleDiagnostics() {
+  const anchors = workerModuleSearchPaths()
+  return { anchors, modules: workerModules().map(({ name }) => {
+    try { return { name, path: resolveWorkerModulePath(name, anchors), version: manifest(anchors[0]!)?.version } }
+    catch (error) { return { name, error: String(error) } }
+  }) }
 }
 
 const loadModule: WorkerModuleLoader = async name => {

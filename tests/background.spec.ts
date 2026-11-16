@@ -62,6 +62,27 @@ it('joins a worker\'s subagents once for the looks that wait on them, as DSH can
   expect(subagents.waitForChildren).toHaveBeenCalledTimes(1)
 })
 
+it('joins and stops rc.3 subagent trees without legacy APIs or permanently draining the root', async () => {
+  const agent = { id: 'worker-modern', status: 'idle', whenIdle: async () => {}, cancel: vi.fn() } as unknown as Agent
+  const child = { cancel: vi.fn() }
+  const treeWait = vi.fn(async () => false)
+  const subagents = { waitForTreeWork: treeWait, interrupt: vi.fn(), drainDescendants: vi.fn(),
+    listDescendants: vi.fn(async () => [
+      { id: 'direct', depth: 1, activity: 'running' }, { id: 'nested', depth: 2, activity: 'running' },
+      { id: 'external', depth: 1, activity: 'running' }, { id: 'done', depth: 1, activity: 'inactive' },
+    ]) }
+  const ctx = { get: (name: string) => name === 'subagents' ? subagents : undefined,
+    agents: { get: (id: string) => id === 'external' ? undefined : child } } as unknown as Context
+  expect(await untilQuiet(ctx, agent, new AbortController().signal)).toBe(true)
+  await stopSubagents(ctx, agent)
+  expect(subagents.interrupt.mock.calls.map(([id]) => id)).toEqual(['direct', 'nested', 'external'])
+  expect(subagents.interrupt).toHaveBeenCalledWith('nested', { kind: 'ancestor', agent })
+  expect(subagents.drainDescendants).not.toHaveBeenCalled()
+  expect(child.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: false })
+  expect(agent.cancel).toHaveBeenCalledOnce()
+  expect(treeWait).toHaveBeenCalledTimes(2)
+})
+
 it('gives up a release of subagents that does not end within 10 seconds, and cancels the turn their ends woke', async () => {
   const { ctx, agent } = setup(async () => false, () => new Promise(() => {}))
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })

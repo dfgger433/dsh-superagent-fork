@@ -16,6 +16,7 @@ import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 import { key } from './core/ids.ts'
 import * as githubSource from './sources/github.ts'
 import * as feishuSource from './sources/feishu.ts'
+import { workerModuleDiagnostics } from './worker-composition.ts'
 
 export const name = 'dsh-superagent'
 export const inject = ['agents', 'agentPresets', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
@@ -54,11 +55,8 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
         .catch(error => { errors.set(agent.id, String(error)); ctx.logger.error(String(error)) })
     }
     const mounted = isolated.plugin({ name: 'superagent-session-deployment', inject, apply(child: Context) {
-      const snapshot = <T>(ref: { get(): T }) => { const value = ref.get(); return { ...ref, get: () => value } }
-      const perSession = { ...machine, stateDir: join(machine.stateDir, 'sessions', key(agent.id)),
-        promptMaxChars: snapshot(machine.promptMaxChars) as typeof machine.promptMaxChars,
-        admissionContextMaxPages: snapshot(machine.admissionContextMaxPages) as typeof machine.admissionContextMaxPages,
-        admissionContextTimeoutMs: snapshot(machine.admissionContextTimeoutMs) as typeof machine.admissionContextTimeoutMs }
+      // Configuration limits are profile-wide volatile references; do not freeze them per Session.
+      const perSession = { ...machine, stateDir: join(machine.stateDir, 'sessions', key(agent.id)) }
       runtime = new Runtime(child, perSession, restart, agent, true, configuration, configurationListener)
       runtimes.set(agent.id, runtime)
       child.effect(() => async () => {
@@ -121,7 +119,12 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     const result = targetId ? { ...describe(targetId), ...inspection } : {
       state: runtimes.size ? 'active' : 'inactive', instances: [...new Set([...runtimes.keys(), ...errors.keys()])].map(describe),
     }
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(result))
+    let diagnostics = {}
+    if (new URL(req.url ?? '/', 'http://localhost').searchParams.get('diagnostics') === 'workers') {
+      try { diagnostics = { workerModules: workerModuleDiagnostics() } }
+      catch (error) { diagnostics = { workerModules: { error: String(error) } } }
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify({ ...result, ...diagnostics }))
   } }))
   ctx.on('agent/created', async ({ agent }) => { if (selected(agent)) await activate(agent) })
   ctx.on('agent-preset/selected', (id, preset) => {

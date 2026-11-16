@@ -236,7 +236,6 @@ export class Settings {
     })
     await sessions.delivery('settings:pause')
     this.host.requestPass()
-    await store.notifyConfigurationChange({ kind: 'settings', before: old, after, block: 'pause', origin })
     return { paused }
   }
   /** Returns the IDs of installed, enabled Sources whose policy section can synchronize now (empty while setup is not configured). */

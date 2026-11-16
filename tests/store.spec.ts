@@ -25,7 +25,7 @@ it('refuses databases newer than this build and rolls back failed atomic work', 
 })
 it('shares only settings and prompt revisions while retaining independent domain tables', () => {
   const seed = new Store(join(directory, 'seed.sqlite'))
-  const seedSettings = SettingsSchema.parse({ paused: true })
+  const seedSettings = SettingsSchema.parse({ paused: true, executor: { maxWorkers: 7 } })
   seed.saveSettings(seedSettings, { source: 'panel', block: 'pause', policyVersion: '', policyChanged: false, notified: [] })
   seed.set(KV.prompts.revision, 1)
   seed.set(KV.prompts.version(1), { revision: 1, previousRevision: 0, savedAt: '', source: 'panel', config: {} } as never)
@@ -34,13 +34,19 @@ it('shares only settings and prompt revisions while retaining independent domain
   const second = new Store(join(directory, 'second.sqlite'))
   second.attachConfiguration(global)
 
-  expect(second.settings().paused).toBe(true)
+  expect(seed.settings().paused).toBe(true)
+  expect(second.settings().paused).toBe(false)
+  expect(second.settings().executor.maxWorkers).toBe(7)
   expect(second.get(KV.prompts.revision)).toBe(1)
   second.tickets.save(ticket('only-second', 'open', [{ state: 'running' }]))
   expect(seed.tickets.get('only-second')).toBeUndefined()
-  second.saveSettings({ ...second.settings(), paused: false }, { source: 'panel', block: 'pause', policyVersion: '', policyChanged: false, notified: [] })
+  seed.saveSettings({ ...seed.settings(), paused: false }, { source: 'panel', block: 'pause', policyVersion: '', policyChanged: false, notified: [] })
   expect(seed.settings().paused).toBe(false)
   expect(seed.blockRevision('pause')).toBe(2)
+  expect(second.blockRevision('pause')).toBe(0)
+  second.saveSettings({ ...second.settings(), executor: { ...second.settings().executor, maxWorkers: 4 } },
+    { source: 'panel', block: 'executor', policyVersion: '', policyChanged: false, notified: [] })
+  expect(seed.settings().executor.maxWorkers).toBe(4)
 
   seed.close(); second.close(); global.close()
 })

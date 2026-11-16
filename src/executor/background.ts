@@ -15,10 +15,12 @@ interface Jobs {
 }
 /** What the Executor uses of DSH's subagents: joining a worker's subagents that work, its subagents, and releasing them. */
 interface Subagents {
-  waitForChildren(parent: Agent): Promise<boolean>
+  waitForChildren?: (parent: Agent) => Promise<boolean>
+  waitForTreeWork?: (root: Agent) => Promise<boolean>
   listChildren?: (parentSessionId: string) => Promise<readonly { id: string }[]>
   listDescendants?: (rootSessionId: string) => Promise<readonly { id: string; depth: number; activity: 'running' | 'inactive' }[]>
-  drainChildren(parent: Agent, childIds: readonly string[]): Promise<void>
+  drainChildren?: (parent: Agent, childIds: readonly string[]) => Promise<void>
+  interrupt?: (id: string, authority: { kind: 'ancestor'; agent: Agent }) => void
 }
 /** How long a stop waits for a killed job to end, collecting its end so the worker is not woken to hear of it. */
 const KILL_WAIT_MS = 10_000
@@ -50,7 +52,9 @@ const joins = new WeakMap<Agent, Promise<boolean>>()
 function childrenEnd(subagents: Subagents, agent: Agent): Promise<boolean> {
   let join = joins.get(agent)
   if (!join) {
-    join = subagents.waitForChildren(agent).finally(() => { joins.delete(agent) })
+    const wait = subagents.waitForTreeWork ?? subagents.waitForChildren
+    if (!wait) return Promise.reject(new Error('DSH Subagent service has no supported work-join API'))
+    join = wait.call(subagents, agent).finally(() => { joins.delete(agent) })
     joins.set(agent, join)
   }
   return join
@@ -142,12 +146,28 @@ export async function collectJob(ctx: Context, sessionId: string, job: { id: str
 export async function stopSubagents(ctx: Context, agent: Agent, keepInbox = false): Promise<void> {
   const subagents = subagentsOf(ctx)
   if (!subagents) return
-  // The catalog lists every subagent the Session had; one that ended has no agent.
-  const listed = subagents.listChildren ? await subagents.listChildren(agent.id)
+  // rc.3 owns whole subagent trees. Interrupt just the working members; draining the
+  // tree here would permanently close delegation for retries on this Worker root.
+  const modern = !!subagents.waitForTreeWork && !!subagents.interrupt && !!subagents.listDescendants
+  const listed = modern ? (await subagents.listDescendants!(agent.id)).filter(child => child.activity === 'running')
+    : subagents.listChildren ? await subagents.listChildren(agent.id)
     : subagents.listDescendants ? (await subagents.listDescendants(agent.id)).filter(child => child.depth === 1 && child.activity === 'running') : []
-  const live = listed.map(child => child.id).filter(id => ctx.agents.get(id as SessionId))
+  const live = modern ? listed.map(child => child.id) : listed.map(child => child.id).filter(id => ctx.agents.get(id as SessionId))
   if (!live.length) return
-  try { await until(subagents.drainChildren(agent, live), undefined, DRAIN_LIMIT_MS) }
+  try {
+    if (modern) {
+      const failures: unknown[] = []
+      for (const id of live) try {
+        subagents.interrupt!(id, { kind: 'ancestor', agent })
+        ctx.agents.get(id as SessionId)?.cancel({ kind: 'user' }, { keepInbox })
+      } catch (error) { failures.push(error) }
+      await until(childrenEnd(subagents, agent), undefined, DRAIN_LIMIT_MS)
+      if (failures.length) throw new AggregateError(failures, 'Interrupting Worker subagents failed')
+    } else {
+      if (!subagents.drainChildren) throw new Error('DSH Subagent service has no supported stop API')
+      await until(subagents.drainChildren(agent, live), undefined, DRAIN_LIMIT_MS)
+    }
+  }
   finally {
     if (agent.status !== 'idle') cancelled.add(agent)
     agent.cancel({ kind: 'user' }, { keepInbox })

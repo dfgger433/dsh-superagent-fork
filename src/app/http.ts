@@ -158,8 +158,11 @@ function routes(runtime: HttpHost): Routes {
   const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
   return {
     'GET state': () => stateView(runtime),
-    'GET overview': () => overview(views(runtime), runtime.health, policyVersion(store.settings()),
-      executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem),
+    'GET overview': () => {
+      const view = overview(views(runtime), runtime.health, policyVersion(store.settings()),
+        executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem)
+      return { ...view, executor: { ...view.executor, maxWorkers: runtime.configured() && runtime.deployment.local ? 1 : view.executor.maxWorkers } }
+    },
     'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
     'GET sources': () => sourcesStatus(views(runtime), runtime.health, setupState(runtime)),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
