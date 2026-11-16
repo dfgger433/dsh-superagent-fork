@@ -141,8 +141,11 @@ export async function collectJob(ctx: Context, sessionId: string, job: { id: str
 export async function stopSubagents(ctx: Context, agent: Agent, keepInbox = false): Promise<void> {
   const subagents = subagentsOf(ctx)
   if (!subagents) return
-  // The parent-owned catalog includes persisted children; draining a direct child also releases its descendants.
-  const live = (await subagents.listDescendants(agent.id)).filter(child => child.depth === 1 && child.activity === 'running').map(child => child.id)
+  const registry = ctx.get('agents') as { list?: () => readonly Agent[] } | undefined
+  // The live registry is sufficient for teardown; draining a direct child also releases its descendants.
+  const live = typeof registry?.list === 'function'
+    ? registry.list().filter(child => child.session.header.parentSession === agent.id).map(child => child.id)
+    : (await subagents.listDescendants(agent.id)).filter(child => child.depth === 1 && child.activity === 'running').map(child => child.id)
   if (!live.length) return
   try { await until(subagents.drainChildren(agent, live), undefined, DRAIN_LIMIT_MS) }
   finally {

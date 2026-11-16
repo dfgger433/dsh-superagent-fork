@@ -1,8 +1,14 @@
 # Changelog
 
+## 0.4.2 — Desktop Subagent recovery compatibility
+
+- Remove every call to the unavailable `listChildren()` method from Ticket execution.
+- Determine whether a native Ticket child exists with the Session Controller's cold-safe `inspect()`; retries no longer depend on a potentially malformed subagent catalog traversal.
+- Stop live direct child agents from the Agent registry and drain their descendants by ID.
+
 ## 0.4.1 — Desktop Subagent API compatibility
 
-- Use the Desktop 0.2.2-rc.3 `listDescendants()` contract for direct-child discovery; do not call the unavailable `listChildren()` method.
+- Use the Desktop 0.2.2-rc.3 `listDescendants()` contract where catalog discovery is needed; do not call the unavailable `listChildren()` method.
 - Filter by direct depth and running activity before stopping team members, preserving settled catalog entries and cold-resume discovery.
 - Check the target local Ticket's failed launch and report can now be retried after upgrading the plugin.
 
