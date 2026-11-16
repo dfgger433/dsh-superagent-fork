@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.6 — Desktop runtime compatibility and Session isolation
+
+- Resolve all official Worker modules from the executing Host installation, validating their version against that Host. Do not fall through to old global/profile or workspace packages. This fixes mixed-version subagent creation (`undefined.id`) and `list_agents` (`listChildren`) failures.
+- Read Ticket transcripts/messages through read-only Session Persistence handles; Desktop does not provide `sessionController.inspect()`.
+- Join rc.3 child work through `waitForTreeWork`, interrupt working descendants when an Assignment stops, and keep the Worker root open for later delegation. Retain the older Host path where available.
+- Scope activation checks and navigation to the current Conversation Session; Settings links open the shared homepage instead of rendering Settings inside the Session view.
+- Store processing pause per Runtime, keeping shared configuration separate. Keep global limits live for already-open Sessions and show one local Worker slot consistently.
+- Add same-origin read-only module diagnostics at `/superagent-status?diagnostics=workers` to report the actual installation anchor, module paths and versions.
+
 ## 0.4.5 — Superagent Conversation View
 
 - Register a **Superagent** tab in DSH's Conversation View row, alongside Chat and Trajectory (not in the Session-list row menu).

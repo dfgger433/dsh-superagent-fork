@@ -8,7 +8,7 @@ dsh-superagent is a proactive coding agent for one GitHub repository, packaged a
 
 It is also a way of working with an agent: **take as little human attention as possible, and give as much value as possible.** An agent that can act for a whole team can also waste a whole team's attention, so it acts only when asked or when a rule the team wrote allows it, and speaks only when someone must act or can use a result. [docs/000-philosophy.md](docs/000-philosophy.md) explains the principle and what it asks of the operator.
 
-## Superagent preset fork (0.4.5)
+## Superagent preset fork (0.4.6)
 
 Each root conversation selecting the single **Superagent** preset gets its own independent task database, queues, Sources and execution state. Profile-wide configuration and prompt revisions are managed in the homepage Superagent panel; that panel does not select or manage local conversations. In the Session conversation view tabs, select **Superagent** to manage that Session's Tickets, threads, execution and reports. Local Ticket executors remain standalone Worker Sessions. The Router itself has no file write/edit or Shell tools. Ordinary presets remain unchanged. With no remote configured, Workers can complete local work directly in the selected project.
 

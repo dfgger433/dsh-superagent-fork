@@ -2,7 +2,7 @@
   "name": "dsh-superagent",
   "author": "DeepSeek Harness Team <team@dsh.dev>",
   "license": "MIT",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "description": "A DSH Superagent Router with profile-wide settings, per-conversation Ticket state, and a session-scoped management view.",
   "type": "module",

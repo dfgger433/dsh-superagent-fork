@@ -32,7 +32,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-type ClientContext = Context & { sessions: ISessions; uiWorkspace: { openSession(target: SessionId): void } }
+type ClientContext = Context & { sessions: ISessions; uiWorkspace: { openSession(target: SessionId): void }; layout: { selectPanel(id: MainPanelId): void } }
 const NS = 'dshSuperagent'
 const PANEL_ID = 'dsh-superagent' as MainPanelId
 const ENTRY = 'dsh-superagent'
@@ -54,10 +54,11 @@ function Mounted({ ctx, t, sessionId }: { ctx: ClientContext; t: T; sessionId?: 
     }
   }
   const activation = usePoll(async () => {
-    const response = await fetch('/superagent-status', { headers: { 'x-orchestrator-request': '1' } })
+    const path = sessionId ? `/superagent-status?sessionId=${encodeURIComponent(sessionId)}` : '/superagent-status'
+    const response = await fetch(path, { headers: { 'x-orchestrator-request': '1' } })
     if (!response.ok) throw new Error(t('offline'))
     return await response.json() as { state: string; error?: string; instances?: { state: string; error?: string }[] }
-  }, [t])
+  }, [t, sessionId])
   if (!activation.data && !activation.error) return <p className="dt-hint">{t('loading')}</p>
   if (activation.error || activation.data?.error || activation.data?.state === 'inactive' || activation.data?.state === 'stopped') return <section className="dt-panel">
     <h1>{t('title')}</h1>
@@ -65,40 +66,26 @@ function Mounted({ ctx, t, sessionId }: { ctx: ClientContext; t: T; sessionId?: 
     {(activation.data?.error || activation.error) && <p role="alert" className="dt-error">{activation.data?.error ?? activation.error?.message}</p>}
     <p className="dt-hint">{t('routerActivationHint')}</p>
   </section>
-  if (sessionId) return <App t={t} sessionId={sessionId} sessionOnly openSession={openSession} deploymentForm={form} />
+  if (sessionId) return <App t={t} sessionId={sessionId} sessionOnly openSession={openSession}
+    openGlobalSettings={() => ctx.layout.selectPanel(PANEL_ID)} deploymentForm={form} />
   return <GlobalSettingsApp t={t} deploymentForm={form} />
 }
 
-export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']
+export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace', 'layout']
 /** Registers the profile-wide panel, the current-Session Conversation View, and the Plugin Manager config view. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-superagent: dictionaries')
   const t = ctx.locale.bind(NS)
-  const openSession = async (id: string) => {
-    try {
-      await openKnownSession(ctx.sessions, id as SessionId, target => ctx.uiWorkspace.openSession(target), new AbortController().signal)
-    } catch (error) {
-      if (error instanceof SessionNavigationError) throw new Error(t(error.code === 'not-ready' ? 'sessionListNotReady' : 'sessionNotListed'))
-      throw error
-    }
-  }
   function PanelEntry(props: { t: T }) { return <Mounted ctx={ctx} t={props.t} /> }
   function SuperagentConversationView(props: {
     sessionId: SessionId; t: T; inspectCall: ((callId: string) => void) | undefined; viewRequest: { view: string; focus: string } | null
     openView: (view: string, focus: string) => void; completeViewRequest: () => void
   }) {
-    return <Mounted ctx={ctx} t={props.t} sessionId={props.sessionId} />
+    return <Mounted key={props.sessionId} ctx={ctx} t={props.t} sessionId={props.sessionId} />
   }
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS, inject: () => ({}) }, PanelEntry))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 10, label: () => t('panel'), locale: NS }, HammerIcon))
-  const registerConversationView = (slots: ClientContext['slots']) => slots.inject('conversation.view', () => slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
-    label: () => t('sessionSuperagentView'), locale: NS }, SuperagentConversationView))
-  const inject = (ctx as unknown as { inject?: (names: string[], callback: (context: Context) => void) => void }).inject
-  if (typeof inject === 'function') inject.call(ctx, ['slots'], viewCtx => {
-    const slots = viewCtx.get('slots') as ClientContext['slots'] | undefined
-    if (slots) viewCtx.effect(() => registerConversationView(slots), 'dsh-superagent: conversation view')
-  })
-  else ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
+  ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
     label: () => t('sessionSuperagentView'), locale: NS }, SuperagentConversationView))
   ctx.slots.inject('plugins.row.config', () => ctx.slots.register({ name: 'plugins.row.config', key: `${ENTRY}#${ENTRY}`, locale: NS },
     (props: PluginConfigViewProps & { t: T }) => <PluginConfig t={props.t} view={props.view} form={props.form} />))

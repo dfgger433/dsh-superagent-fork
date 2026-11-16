@@ -21,6 +21,7 @@ import { When } from './widgets.tsx'
 
 export interface AppProps {
   t: T; openSession: (sessionId: string) => Promise<void>
+  openGlobalSettings?: (group: SettingsGroup) => void
   deploymentForm: DeploymentForm
   sessionId?: string
   sessionOnly?: boolean
@@ -172,21 +173,28 @@ function Pages({ route, openTab, deploymentForm, tabs, sessionOnly }: { route: R
 }
 
 /** Root panel component managing route history and shared panel state. */
-export function App({ t, openSession, deploymentForm, sessionId, sessionOnly = false }: AppProps) {
+export function App({ t, openSession, openGlobalSettings, deploymentForm, sessionId, sessionOnly = false }: AppProps) {
   const tabs = sessionOnly ? TABS.filter(tab => tab !== 'settings') : TABS
   const routeStorageKey = sessionOnly && sessionId ? `dsh-superagent/session/${sessionId}/route` : undefined
   const [location, setLocation] = useState(() => {
     const initial = initialLocation(routeStorageKey)
-    return sessionOnly && initial.route.page === 'settings' ? { route: HOME, stack: [] } : initial
+    if (!sessionOnly) return initial
+    return { route: initial.route.page === 'settings' ? HOME : initial.route,
+      stack: initial.stack.filter(item => item.page !== 'settings') }
   })
   useEffect(() => { remember(location, routeStorageKey) }, [location, routeStorageKey])
   // Preserve the last opened settings group across navigation so the Settings tab reopens at it.
   const move = useCallback((next: (current: Location) => Pick<Location, 'route' | 'stack'>) =>
     setLocation(current => ({ ...next(current), group: lastSettingsGroup(current) })), [])
   /** Navigates to `route`; `replace` swaps the current entry (filters, paging) instead of pushing a back step. */
-  const navigate = useCallback((route: Route, replace = false) => move(current => ({ route,
-    stack: replace ? current.stack : [...current.stack, current.route].slice(-20) })), [move])
-  const back = useCallback(() => move(current => ({ route: current.stack.at(-1) ?? HOME, stack: current.stack.slice(0, -1) })), [move])
+  const navigate = useCallback((route: Route, replace = false) => {
+    if (sessionOnly && route.page === 'settings') { openGlobalSettings?.(route.query.group); return }
+    move(current => ({ route, stack: replace ? current.stack : [...current.stack, current.route].slice(-20) }))
+  }, [move, openGlobalSettings, sessionOnly])
+  const back = useCallback(() => move(current => {
+    const stack = sessionOnly ? current.stack.filter(item => item.page !== 'settings') : current.stack
+    return { route: stack.at(-1) ?? HOME, stack: stack.slice(0, -1) }
+  }), [move, sessionOnly])
   const openTab = useCallback((tab: Tab) => move(current => ({ stack: [], route: tab === 'settings'
     ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })), [move])
   return <PanelProvider key={sessionId ?? 'legacy'} t={t} sessionId={sessionId} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>

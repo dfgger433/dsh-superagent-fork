@@ -65,6 +65,18 @@
 
 用户指定 session-4d4d6c48-2d79-4c9c-9c0d-aeb5c7faf7d5 的历史回执报告 `@deepseek-ai/dsh-persona` 缺失；本轮验证发现当前Electron安装锚点该包及全部14个同组运行包都能解析，故它不是当前安装态缺件。无法安全地伪造用户会话来重放失败步骤；Worker动态挂载回滚会把具体模块加载错误留在该Ticket Worker启动失败报告中，便于下次真实任务定位。
 
+## 0.4.6 — 目标会话现场报告驱动的深度修复
+
+目标 Session：`session-03e576c7-b752-47d2-b35a-986795b5480d`；实际读取 `/api/tickets?state=ended`，而非仅查看 active 状态。两个已完成冒烟 Ticket 的报告（尤其 `a05d941c2435abbd62c702c0e609c355`）记录三项持续失败：子代理创建 `undefined.id`、`list_agents(children)` 的 `listChildren` 缺失，以及 transcript/message 的 `sessionController.inspect` 缺失。
+
+使用当前 Desktop Electron 的 ASAR 文件系统核对 rc.3 的实际源码，发现 rc.3 自带 subagent 工具使用扁平 Activation 参数、无参数的 list_agents 和 listDescendants；profile 下旧全局 rc.1 工具仍用嵌套 request 与 listChildren。Desktop Host 由 argv 获取安装锚点，Host 的 process.env 与工具 shell 注入的 DSH_INSTALL_DIR 不同。已修复官方工具跨安装混用，不能再把这个错误推给 Desktop 宿主或浏览器缓存。
+
+修复后新增/更新回归覆盖：官方包单安装锚点及版本一致、持久化 transcript/message 分页与句柄释放、rc.3 子代理等待和中断（不关闭根的后续 admission）、单会话暂停隔离、全局限制即时生效、本地总览槽位、按 Session 的激活检查及会话内部 Settings 路由拒绝。完整 `pnpm check`：**1,218 passed / 30 skipped**；64 test files passed / 1 skipped，类型检查和六个构建入口通过。
+
+插件已通过 Plugin Manager 停用/启用重新挂载，两次返回 `application: applied`。实际 Host `/superagent-status?sessionId=...&diagnostics=workers` 返回 13 个模块、0 个解析错误，全部位于当前 Desktop ASAR，版本均为 `0.2.2-rc.3`；目标 Session 保持 active/configured/local，Router 仍只有 16 个 orchestrator 工具。总览返回 maxWorkers=1，未重新执行已完成 Ticket。现场诊断 JSON 保存于本项目 `.artifacts/0.4.6-host-diagnostics.json`。
+
+界面审查由独立子智能体完成，检查发现性、设置链接行为和错误反馈。没有连接到当前认证浏览器的控制工具，故不把 Client 注册、源码或组件测试称为现场 UI 点击成功；本轮没有启动替代浏览器、没有向用户完成的 Ticket 注入新任务。
+
 ## 边界
 
 模型和远端使用测试替身；真实远端授权/投递、飞书账号、安装后的渲染及图标尚未验证。Linux 专属脚本本次未在 Linux 主机重跑。没有将 mock 主会话集成测试称为真实模型端到端验证。

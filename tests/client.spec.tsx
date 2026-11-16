@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ApiError, caller, usePoll } from '../src/client/api.ts'
 import { apply } from '../src/client/index.tsx'
+import { App } from '../src/client/app.tsx'
 import { zh } from '../src/client/locales.ts'
 import { SettingsSchema } from '../src/policy.ts'
 
@@ -21,6 +22,7 @@ function fixture(listed: string[]) {
     effect: (effect: () => unknown) => { effect() },
     sessions: { list: { getSnapshot: () => ({ phase: 'ready', byId: Object.fromEntries(listed.map(id => [id, {}])) }) }, refresh: vi.fn(async () => {}) },
     uiWorkspace: { openSession: vi.fn() },
+    layout: { selectPanel: vi.fn() },
     // Omit config form service so Deployment renders read-only.
     get: () => undefined,
   }
@@ -75,8 +77,54 @@ it('registers the Superagent Conversation View and scopes its management API to 
   const view = await render(viewEntry, { t, sessionId: 'session-view', inspectCall: undefined, viewRequest: null,
     openView: vi.fn(), completeViewRequest: vi.fn() })
   expect(view.container.textContent).toContain(zh['tab.overview'])
+  expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toContain('/superagent-status?sessionId=session-view')
   expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toContain('/orchestrator/sessions/session-view/api/state')
   expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).not.toContain('/orchestrator/global/api/state')
+  view.dispose()
+})
+
+it('drops stored Session Settings routes before rendering or returning', async () => {
+  serve()
+  sessionStorage.setItem('dsh-superagent/session/session-route/route', JSON.stringify({ route: { page: 'overview' },
+    stack: [{ page: 'settings', query: { group: 'source' } }] }))
+  const view = await render({ options: { name: 'main' }, component: () => <App t={t}
+    sessionId="session-route" sessionOnly openSession={async () => {}} deploymentForm={undefined} /> }, {})
+  expect(view.container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(zh['tab.overview'])
+  expect(view.container.textContent).not.toContain(zh['tab.settings'])
+  const saved = JSON.parse(sessionStorage.getItem('dsh-superagent/session/session-route/route')!)
+  expect(saved.stack).toEqual([])
+  view.dispose()
+})
+
+it('does not call a Session API when that Session is inactive', async () => {
+  serve({ state: 'inactive' })
+  const { entries } = fixture(['inactive-session'])
+  const viewEntry = entries.find(entry => entry.options.name === 'conversation.view')!
+  const view = await render(viewEntry, { t, sessionId: 'inactive-session', inspectCall: undefined, viewRequest: null,
+    openView: vi.fn(), completeViewRequest: vi.fn() })
+  const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url))
+  expect(urls).toContain('/superagent-status?sessionId=inactive-session')
+  expect(urls.some(url => url.includes('/orchestrator/sessions/'))).toBe(false)
+  view.dispose()
+})
+
+it('opens shared settings in the homepage when a Session problem links to settings', async () => {
+  sessionStorage.clear()
+  serve({ state: 'active' })
+  const baseFetch = fetch
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const response = await baseFetch(url, init)
+    if (String(url).endsWith('/overview')) return Response.json({ ...await response.json(), problems: [{ kind: 'no-source' }] })
+    return response
+  }))
+  const { ctx, entries } = fixture(['settings-link'])
+  const entry = entries.find(item => item.options.name === 'conversation.view')!
+  const view = await render(entry, { t, sessionId: 'settings-link' })
+  const button = [...view.container.querySelectorAll('button')].find(item => item.textContent === zh.actionOpenSources)!
+  await act(async () => { button.click() })
+  expect(ctx.layout.selectPanel).toHaveBeenCalledExactlyOnceWith('dsh-superagent')
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/settings'))).toBe(false)
+  expect(view.container.querySelector('.dt-settings')).toBeNull()
   view.dispose()
 })
 
