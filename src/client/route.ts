@@ -47,6 +47,19 @@ export function parseRoute(value: unknown): Route | undefined {
 }
 
 const ROUTE_KEY = 'dsh-superagent/route'
+const GLOBAL_SETTINGS_KEY = 'dsh-superagent/global-settings-group'
+export const GLOBAL_SETTINGS_EVENT = 'dsh-superagent:open-global-settings'
+export function requestGlobalSettings(group: SettingsGroup): void {
+  try { sessionStorage.setItem(GLOBAL_SETTINGS_KEY, group) } catch (error) { void error }
+  window.dispatchEvent(new CustomEvent(GLOBAL_SETTINGS_EVENT, { detail: group }))
+}
+export function takeGlobalSettingsRequest(): SettingsGroup | undefined {
+  try {
+    const value = sessionStorage.getItem(GLOBAL_SETTINGS_KEY)
+    sessionStorage.removeItem(GLOBAL_SETTINGS_KEY)
+    return pick(SETTINGS_GROUPS, value)
+  } catch { return undefined }
+}
 export interface Location { route: Route; stack: Route[]; group?: SettingsGroup | undefined }
 export const lastSettingsGroup = ({ route, group }: Location): SettingsGroup => route.page === 'settings' ? route.query.group
   : group ?? 'source'

@@ -10,7 +10,7 @@ import { GLOSSARY, GLOSSARY_VALUES, en, zh, type DshSuperagentKey } from './loca
 import { OverviewPage } from './overview.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
 import { HOME, TABS, initialLocation, lastSettingsGroup, remember, routeLabel, settingsRoute, type Location, type Route,
-  type SettingsGroup, SETTINGS_GROUPS, type Tab } from './route.ts'
+  type SettingsGroup, SETTINGS_GROUPS, type Tab, GLOBAL_SETTINGS_EVENT, takeGlobalSettingsRequest } from './route.ts'
 import { SettingsPage } from './settings.tsx'
 import { SourceStatus } from './source.tsx'
 import { actorName, errorText, reasonLabel, valueLabel, type T, readableMarkers } from './text.ts'
@@ -215,7 +215,15 @@ function GlobalSettingsPage({ group, deploymentForm }: { group: SettingsGroup; d
 
 /** Profile-wide settings surface. Local Session conversations and Ticket execution stay in their own DSH Sessions. */
 export function GlobalSettingsApp({ t, deploymentForm }: { t: T; deploymentForm: DeploymentForm }) {
-  const [group, setGroup] = useState<SettingsGroup>('source')
+  const [group, setGroup] = useState<SettingsGroup>(() => takeGlobalSettingsRequest() ?? 'source')
+  useEffect(() => {
+    const open = (event: Event) => {
+      const requested = (event as CustomEvent<SettingsGroup>).detail
+      if (SETTINGS_GROUPS.includes(requested)) setGroup(requested)
+    }
+    window.addEventListener(GLOBAL_SETTINGS_EVENT, open)
+    return () => window.removeEventListener(GLOBAL_SETTINGS_EVENT, open)
+  }, [])
   const navigate = useCallback((route: Route) => { if (route.page === 'settings') setGroup(route.query.group) }, [])
   return <PanelProvider t={t} global interval={10_000} navigate={navigate}>
     <GlobalSettingsPage group={group} deploymentForm={deploymentForm} />

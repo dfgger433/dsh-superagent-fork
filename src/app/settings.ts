@@ -156,7 +156,9 @@ export class Settings {
     if (kind === 'source' && !sources.kind(id)) throw new UserError('sourceNotInstalled', { source: id })
     const parsed = rules.parse(value, sources, id)
     const current = store.settings()
+    // The processing pause belongs to one Runtime, not the shared profile settings.
     const candidate = rules.merge(current, parsed, id)
+    candidate.paused = current.paused
     const model = block === 'eval' ? candidate.eval.model : block === 'executor' ? candidate.executor.model : null
     const previous = block === 'eval' ? current.eval.model : block === 'executor' ? current.executor.model : null
     if (model && JSON.stringify(model) !== JSON.stringify(previous)) {
@@ -169,6 +171,7 @@ export class Settings {
     // Re-read current settings after async checks in case unrelated blocks were saved concurrently.
     const old = store.settings()
     const settings = rules.merge(old, parsed, id)
+    settings.paused = old.paused
     if (JSON.stringify(SettingsSchema.parse(settings)) === JSON.stringify(old)) {
       const delivery = await sessions.delivery(`settings:${block}`)
       return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting: false, context_delivery: delivery }

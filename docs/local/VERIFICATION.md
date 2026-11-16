@@ -71,7 +71,7 @@
 
 使用当前 Desktop Electron 的 ASAR 文件系统核对 rc.3 的实际源码，发现 rc.3 自带 subagent 工具使用扁平 Activation 参数、无参数的 list_agents 和 listDescendants；profile 下旧全局 rc.1 工具仍用嵌套 request 与 listChildren。Desktop Host 由 argv 获取安装锚点，Host 的 process.env 与工具 shell 注入的 DSH_INSTALL_DIR 不同。已修复官方工具跨安装混用，不能再把这个错误推给 Desktop 宿主或浏览器缓存。
 
-修复后新增/更新回归覆盖：官方包单安装锚点及版本一致、持久化 transcript/message 分页与句柄释放、rc.3 子代理等待和中断（不关闭根的后续 admission）、单会话暂停隔离、全局限制即时生效、本地总览槽位、按 Session 的激活检查及会话内部 Settings 路由拒绝。完整 `pnpm check`：**1,218 passed / 30 skipped**；64 test files passed / 1 skipped，类型检查和六个构建入口通过。
+修复后新增/更新回归覆盖：官方包单安装锚点及版本一致、持久化 transcript/message 分页与句柄释放、rc.3 子代理等待和中断（不关闭根的后续 admission）、单会话暂停隔离、全局限制即时生效、本地总览槽位、按 Session 的激活检查及会话内部 Settings 路由拒绝。完整 `pnpm check`：**1,219 passed / 30 skipped**；64 test files passed / 1 skipped，类型检查和六个构建入口通过。
 
 插件已通过 Plugin Manager 停用/启用重新挂载，两次返回 `application: applied`。实际 Host `/superagent-status?sessionId=...&diagnostics=workers` 返回 13 个模块、0 个解析错误，全部位于当前 Desktop ASAR，版本均为 `0.2.2-rc.3`；目标 Session 保持 active/configured/local，Router 仍只有 16 个 orchestrator 工具。总览返回 maxWorkers=1，未重新执行已完成 Ticket。现场诊断 JSON 保存于本项目 `.artifacts/0.4.6-host-diagnostics.json`。
 

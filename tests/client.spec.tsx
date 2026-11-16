@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ApiError, caller, usePoll } from '../src/client/api.ts'
 import { apply } from '../src/client/index.tsx'
+import { takeGlobalSettingsRequest } from '../src/client/route.ts'
 import { App } from '../src/client/app.tsx'
 import { zh } from '../src/client/locales.ts'
 import { SettingsSchema } from '../src/policy.ts'
@@ -20,6 +21,8 @@ function fixture(listed: string[]) {
     slots: { inject: (_name: string, register: () => void) => register(), register: (options: Entry['options'], component: Entry['component']) => { entries.push({ options, component }); return () => {} } },
     locale: { register: (ns: string, value: unknown) => { dictionaries[ns] = value; return () => {} }, bind: () => t },
     effect: (effect: () => unknown) => { effect() },
+    inject: (_services: string[], callback: (child: unknown) => void) => callback({ get: (name: string) => name === 'slots' ? ctx.slots : undefined,
+      effect: ctx.effect }),
     sessions: { list: { getSnapshot: () => ({ phase: 'ready', byId: Object.fromEntries(listed.map(id => [id, {}])) }) }, refresh: vi.fn(async () => {}) },
     uiWorkspace: { openSession: vi.fn() },
     layout: { selectPanel: vi.fn() },
@@ -123,6 +126,9 @@ it('opens shared settings in the homepage when a Session problem links to settin
   const button = [...view.container.querySelectorAll('button')].find(item => item.textContent === zh.actionOpenSources)!
   await act(async () => { button.click() })
   expect(ctx.layout.selectPanel).toHaveBeenCalledExactlyOnceWith('dsh-superagent')
+  expect(sessionStorage.getItem('dsh-superagent/global-settings-group')).toBe('source')
+  expect(takeGlobalSettingsRequest()).toBe('source')
+  expect(sessionStorage.getItem('dsh-superagent/global-settings-group')).toBeNull()
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/settings'))).toBe(false)
   expect(view.container.querySelector('.dt-settings')).toBeNull()
   view.dispose()

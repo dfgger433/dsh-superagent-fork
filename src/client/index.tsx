@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { App, GlobalSettingsApp } from './app.tsx'
+import { requestGlobalSettings } from './route.ts'
 import { usePoll } from './api.ts'
 import { PluginConfig, usePageForm } from './deployment.tsx'
 import { en, zh } from './locales.ts'
@@ -67,7 +68,7 @@ function Mounted({ ctx, t, sessionId }: { ctx: ClientContext; t: T; sessionId?: 
     <p className="dt-hint">{t('routerActivationHint')}</p>
   </section>
   if (sessionId) return <App t={t} sessionId={sessionId} sessionOnly openSession={openSession}
-    openGlobalSettings={() => ctx.layout.selectPanel(PANEL_ID)} deploymentForm={form} />
+    openGlobalSettings={group => { requestGlobalSettings(group); ctx.layout.selectPanel(PANEL_ID) }} deploymentForm={form} />
   return <GlobalSettingsApp t={t} deploymentForm={form} />
 }
 
@@ -85,8 +86,11 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS, inject: () => ({}) }, PanelEntry))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 10, label: () => t('panel'), locale: NS }, HammerIcon))
-  ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
-    label: () => t('sessionSuperagentView'), locale: NS }, SuperagentConversationView))
+  ctx.inject(['slots'], viewCtx => {
+    const slots = viewCtx.get('slots') as ClientContext['slots']
+    viewCtx.effect(() => slots.inject('conversation.view', () => slots.register({ name: 'conversation.view', id: 'dsh-superagent', order: 30,
+      label: () => t('sessionSuperagentView'), locale: NS }, SuperagentConversationView)), 'dsh-superagent: conversation view')
+  })
   ctx.slots.inject('plugins.row.config', () => ctx.slots.register({ name: 'plugins.row.config', key: `${ENTRY}#${ENTRY}`, locale: NS },
     (props: PluginConfigViewProps & { t: T }) => <PluginConfig t={props.t} view={props.view} form={props.form} />))
 }

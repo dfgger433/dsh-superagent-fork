@@ -67,6 +67,7 @@ it('boots the actual Host and Runtime from fresh default configuration and serve
     expect((await call('/orchestrator/sessions/fresh-router/api/state', '/orchestrator/sessions/fresh-router')).value.paused).toBe(true)
     expect((await call('/orchestrator/sessions/target-router/api/state', '/orchestrator/sessions/target-router')).value.paused).toBe(false)
     expect((await call('/orchestrator/global/api/settings', '/orchestrator/global')).status).toBe(200)
+
     promptLimit = 70000
     for (const id of ['fresh-router', 'target-router']) {
       expect((await call(`/orchestrator/sessions/${id}/api/state`, `/orchestrator/sessions/${id}`)).value.setup.machine.promptMaxChars).toBe(70000)
